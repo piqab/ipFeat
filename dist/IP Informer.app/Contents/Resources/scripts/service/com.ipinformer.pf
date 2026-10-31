@@ -1,0 +1,8 @@
+# User applications may leave only through the IP Informer TUN.
+# sing-box runs as root and creates its physical-interface connections itself.
+pass out quick on lo0 all user >= 500
+# Connected LAN routes take precedence over the TUN default route on macOS.
+# Send private IPv4 traffic into sing-box so per-application rules decide it.
+pass out quick on ! utun100 route-to (utun100 172.19.0.1) inet proto { tcp udp } from any to { 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 } user >= 500
+pass out quick on utun100 all user >= 500
+block drop out quick all user >= 500
