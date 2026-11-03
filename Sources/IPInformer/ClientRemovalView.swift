@@ -48,15 +48,23 @@ struct ClientRemovalView: View {
         }.map(\.id))
         let groups = store.configuration.groups.filter { $0.profileID.map(removedIDs.contains) == true }.map(\.name)
         let apps = store.configuration.applications.filter { $0.profileID.map(removedIDs.contains) == true }.map(\.name)
+        let commands = store.configuration.commands.filter { $0.profileID.map(removedIDs.contains) == true }.map(\.name)
         var parts: [String] = []
         if store.selectedDefaultRoute == .outbound(connection.outboundTag) { parts.append("общий маршрут") }
         if !groups.isEmpty { parts.append("группы: \(groups.joined(separator: ", "))") }
         if !apps.isEmpty { parts.append("программы: \(apps.joined(separator: ", "))") }
+        if !commands.isEmpty { parts.append("команды: \(commands.joined(separator: ", "))") }
         return parts.isEmpty ? "Активных назначений нет." : "Используют подключение: \(parts.joined(separator: "; "))."
     }
 
     private var managementTrafficUsesThisServer: Bool {
         if store.selectedDefaultRoute == .outbound(connection.outboundTag) { return true }
+        if store.configuration.commands.contains(where: { command in
+            guard command.enabled, ["ssh", "scp"].contains(URL(fileURLWithPath: command.executablePath).lastPathComponent),
+                  let profileID = command.profileID,
+                  let profile = store.configuration.profiles.first(where: { $0.id == profileID }) else { return false }
+            return profile.kind == .outbound && profile.outboundTag == connection.outboundTag
+        }) { return true }
         guard let ownApp = store.configuration.applications.first(where: {
             $0.bundleIdentifier == RoutingStore.selfBundleIdentifier
         }) else { return false }

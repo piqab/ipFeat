@@ -433,6 +433,13 @@ final class RoutingStore: ObservableObject {
                 missing.append(app.name)
             }
         }
+        for index in restored.commands.indices where restored.commands[index].enabled {
+            let command = restored.commands[index]
+            if !FileManager.default.isExecutableFile(atPath: command.executablePath) {
+                restored.commands[index].enabled = false
+                missing.append("Команда: \(command.name)")
+            }
+        }
         return (restored, missing)
     }
 
@@ -475,7 +482,65 @@ final class RoutingStore: ObservableObject {
         for index in configuration.applications.indices where configuration.applications[index].profileID == profile.id {
             configuration.applications[index].profileID = nil
         }
+        for index in configuration.commands.indices where configuration.commands[index].profileID == profile.id {
+            configuration.commands[index].profileID = nil
+        }
         persistAndRegenerate()
+    }
+
+    func addCommands(at urls: [URL]) -> [String] {
+        var errors: [String] = []
+        var known = Set(configuration.commands.map {
+            URL(fileURLWithPath: $0.executablePath).resolvingSymlinksInPath().path
+        })
+        var added: [RoutedCommand] = []
+        for url in urls {
+            let path = url.standardizedFileURL.path
+            guard path.hasPrefix("/"), !path.contains(".app/"),
+                  FileManager.default.isExecutableFile(atPath: path) else {
+                errors.append("\(url.lastPathComponent): выберите исполняемый файл команды, а не .app")
+                continue
+            }
+            let canonical = url.resolvingSymlinksInPath().path
+            guard !known.contains(canonical) else { continue }
+            known.insert(canonical)
+            added.append(RoutedCommand(name: url.lastPathComponent, executablePath: path))
+        }
+        if !added.isEmpty {
+            configuration.commands.append(contentsOf: added)
+            persistAndRegenerate()
+        }
+        return errors
+    }
+
+    func updateCommand(_ command: RoutedCommand) {
+        guard let index = configuration.commands.firstIndex(where: { $0.id == command.id }) else { return }
+        configuration.commands[index] = command
+        persistAndRegenerate()
+    }
+
+    func removeCommand(_ command: RoutedCommand) {
+        configuration.commands.removeAll { $0.id == command.id }
+        persistAndRegenerate()
+    }
+
+    func relinkCommand(_ command: RoutedCommand, to url: URL) -> String? {
+        let path = url.standardizedFileURL.path
+        guard !path.contains(".app/"), FileManager.default.isExecutableFile(atPath: path) else {
+            return "Выберите исполняемый файл команды"
+        }
+        let canonical = url.resolvingSymlinksInPath().path
+        guard !configuration.commands.contains(where: {
+            $0.id != command.id && URL(fileURLWithPath: $0.executablePath).resolvingSymlinksInPath().path == canonical
+        }) else { return "Эта команда уже добавлена" }
+        guard let index = configuration.commands.firstIndex(where: { $0.id == command.id }) else {
+            return "Команда не найдена"
+        }
+        configuration.commands[index].executablePath = path
+        configuration.commands[index].name = url.lastPathComponent
+        configuration.commands[index].enabled = true
+        persistAndRegenerate()
+        return nil
     }
 
     func addGroup() {

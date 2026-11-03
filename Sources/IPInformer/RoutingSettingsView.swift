@@ -7,6 +7,7 @@ struct RoutingSettingsView: View {
     @ObservedObject var store: RoutingStore
     let section: RoutingSettingsSection
     @State private var addError: String?
+    @State private var commandError: String?
     @State private var collapsedGroupIDs: Set<UUID> = []
     @State private var editingGroupID: UUID?
 
@@ -18,6 +19,8 @@ struct RoutingSettingsView: View {
                     defaultRouteSection
                     Divider()
                     applicationsSection
+                    Divider()
+                    commandsSection
                     Divider()
                     redirectsSection
                 case .profiles:
@@ -223,6 +226,81 @@ struct RoutingSettingsView: View {
             guard let groupID = application.groupID else { return true }
             return !store.configuration.groups.contains { $0.id == groupID }
         }
+    }
+
+    private var commandsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Команды терминала").font(.headline)
+                Spacer()
+                Button("Добавить SSH, curl и nc") {
+                    let urls = ["/usr/bin/ssh", "/usr/bin/curl", "/usr/bin/nc"].map(URL.init(fileURLWithPath:))
+                    let errors = store.addCommands(at: urls)
+                    commandError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+                }
+                Button("Выбрать файлы…", systemImage: "plus") { chooseCommands() }
+            }
+            Text("Правило привязано к исполняемому файлу: оно действует для команды из iTerm, Terminal и других программ. Выберите внешний маршрут; локальные IPv4 можно направить напрямую независимо от него. Для произвольных дочерних процессов iTerm правило автоматически не наследуется.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let commandError {
+                Text(commandError).font(.caption).foregroundStyle(.red)
+            }
+            ForEach(store.configuration.commands) { command in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Toggle("", isOn: commandBinding(command, \.enabled)).labelsHidden()
+                        Image(systemName: "terminal").frame(width: 28)
+                        Text(command.name).fontWeight(.medium)
+                        Spacer()
+                        Button(role: .destructive) { store.removeCommand(command) } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    Text(command.executablePath)
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if !FileManager.default.isExecutableFile(atPath: command.executablePath) {
+                        Button("Найти команду…") { chooseCommandReplacement(for: command) }
+                            .font(.caption)
+                    }
+                    Picker("Маршрут команды", selection: commandBinding(command, \.profileID)) {
+                        Text("Общий маршрут").tag(UUID?.none)
+                        ForEach(store.configuration.profiles) { profile in
+                            Text(profile.name).tag(Optional(profile.id))
+                        }
+                    }
+                    .frame(maxWidth: 420)
+                    Toggle("Локальные IPv4 напрямую", isOn: commandBinding(command, \.allowLocalNetwork))
+                        .controlSize(.small)
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if store.configuration.commands.isEmpty {
+                emptyHint("Добавьте исполняемый файл команды, например /usr/bin/ssh.")
+            }
+        }
+    }
+
+    private func chooseCommands() {
+        let panel = NSOpenPanel()
+        panel.title = "Выберите исполняемые файлы команд"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        guard panel.runModal() == .OK else { return }
+        let errors = store.addCommands(at: panel.urls)
+        commandError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+    }
+
+    private func chooseCommandReplacement(for command: RoutedCommand) {
+        let panel = NSOpenPanel()
+        panel.title = "Найдите команду \(command.name)"
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        commandError = store.relinkCommand(command, to: url)
     }
 
     private func groupCard(_ group: RoutingGroup) -> some View {
@@ -461,6 +539,17 @@ struct RoutingSettingsView: View {
                 var updated = store.configuration.applications.first(where: { $0.id == app.id }) ?? app
                 updated[keyPath: keyPath] = value
                 store.updateApplication(updated)
+            }
+        )
+    }
+
+    private func commandBinding<Value>(_ command: RoutedCommand, _ keyPath: WritableKeyPath<RoutedCommand, Value>) -> Binding<Value> {
+        Binding(
+            get: { store.configuration.commands.first(where: { $0.id == command.id })?[keyPath: keyPath] ?? command[keyPath: keyPath] },
+            set: { value in
+                var updated = store.configuration.commands.first(where: { $0.id == command.id }) ?? command
+                updated[keyPath: keyPath] = value
+                store.updateCommand(updated)
             }
         )
     }

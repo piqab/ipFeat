@@ -21,6 +21,9 @@ enum ClientConnectionRemoval {
         for index in candidate.applications.indices where candidate.applications[index].profileID.map(removedProfileIDs.contains) == true {
             candidate.applications[index].profileID = replacementProfileID
         }
+        for index in candidate.commands.indices where candidate.commands[index].profileID.map(removedProfileIDs.contains) == true {
+            candidate.commands[index].profileID = replacementProfileID
+        }
         let mainFinal = (try? JSONSerialization.jsonObject(with: Data(configuration.mainConfigurationJSON.utf8)))
             .flatMap { $0 as? [String: Any] }
             .flatMap { $0["route"] as? [String: Any] }?["final"] as? String

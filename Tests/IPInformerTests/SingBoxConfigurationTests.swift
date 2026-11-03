@@ -3,6 +3,66 @@ import XCTest
 @testable import IPInformer
 
 final class SingBoxConfigurationTests: XCTestCase {
+    func testCommandRoutesLocalIPv4BeforeSelectedProxyAndPersists() throws {
+        let profile = RoutingProfile(name: "Proxy", outboundTag: "proxy-us")
+        let command = RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh", profileID: profile.id)
+        let en0 = try XCTUnwrap(LocalIPv4Network(interface: "en0", address: 0xc0a8_0bf5, mask: 0xffff_ff00))
+        let en6 = try XCTUnwrap(LocalIPv4Network(interface: "en6", address: 0xc0a8_4dc8, mask: 0xffff_ff00))
+        let config = RoutingConfiguration(profiles: [profile], commands: [command],
+                                          mainConfigurationJSON: mainConfiguration,
+                                          defaultRoute: .outbound("direct"))
+        let decoded = try JSONDecoder().decode(RoutingConfiguration.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(decoded.commands, [command])
+        let data = try SingBoxConfigurationGenerator.data(for: decoded, localNetworks: [en0, en6])
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let rules = try XCTUnwrap((root["route"] as? [String: Any])?["rules"] as? [[String: Any]])
+        let matching = rules.enumerated().filter {
+            ($0.element["process_path"] as? [String])?.contains("/usr/bin/ssh") == true
+        }
+        let lan = try XCTUnwrap(matching.first { ($0.element["ip_cidr"] as? [String]) == [en0.cidr] })
+        let fallback = try XCTUnwrap(matching.first { ($0.element["ip_cidr"] as? [String])?.contains("192.168.0.0/16") == true })
+        let publicRoute = try XCTUnwrap(matching.first { $0.element["ip_cidr"] == nil })
+        XCTAssertEqual(lan.element["outbound"] as? String, en0.outboundTag)
+        XCTAssertEqual(fallback.element["outbound"] as? String, SingBoxConfigurationGenerator.localDirectTag)
+        XCTAssertEqual(publicRoute.element["outbound"] as? String, "proxy-us")
+        XCTAssertLessThan(lan.offset, fallback.offset)
+        XCTAssertLessThan(fallback.offset, publicRoute.offset)
+        if let binary = NewServerConfiguration.availableBinary() {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-command-\(UUID()).json")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try data.write(to: url)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["check", "-c", url.path]
+            let output = Pipe()
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0,
+                           String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        }
+    }
+
+    func testCommandWithDefaultRouteOnlyOverridesLocalDestinations() throws {
+        let command = RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh")
+        let config = RoutingConfiguration(commands: [command], mainConfigurationJSON: mainConfiguration,
+                                          defaultRoute: .outbound("proxy-us"))
+        let rules = try XCTUnwrap((root(for: config)["route"] as? [String: Any])?["rules"] as? [[String: Any]])
+        let commandRules = rules.filter { ($0["process_path"] as? [String])?.contains("/usr/bin/ssh") == true }
+        XCTAssertEqual(commandRules.count, 1)
+        XCTAssertNotNil(commandRules.first?["ip_cidr"])
+        XCTAssertEqual(commandRules.first?["outbound"] as? String, SingBoxConfigurationGenerator.localDirectTag)
+        XCTAssertTrue(rules.contains {
+            ($0["inbound"] as? [String]) == [SingBoxConfigurationGenerator.managedInboundTag]
+                && ($0["outbound"] as? String) == "proxy-us"
+        })
+
+        var disabled = config
+        disabled.commands[0].enabled = false
+        let disabledRules = try XCTUnwrap((root(for: disabled)["route"] as? [String: Any])?["rules"] as? [[String: Any]])
+        XCTAssertFalse(disabledRules.contains { $0["process_path"] != nil })
+    }
+
     func testGroupOverridesSavedPersonalProfileUntilAppLeavesGroup() throws {
         let groupProfile = RoutingProfile(name: "Group", outboundTag: "proxy-de")
         let appProfile = RoutingProfile(name: "App", outboundTag: "proxy-us")

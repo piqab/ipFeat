@@ -146,6 +146,25 @@ struct RoutedApplication: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+struct RoutedCommand: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID
+    var name: String
+    var executablePath: String
+    var profileID: UUID?
+    var enabled: Bool
+    var allowLocalNetwork: Bool
+
+    init(id: UUID = UUID(), name: String, executablePath: String,
+         profileID: UUID? = nil, enabled: Bool = true, allowLocalNetwork: Bool = true) {
+        self.id = id
+        self.name = name
+        self.executablePath = executablePath
+        self.profileID = profileID
+        self.enabled = enabled
+        self.allowLocalNetwork = allowLocalNetwork
+    }
+}
+
 struct ApplicationRedirect: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var applicationID: UUID?
@@ -160,6 +179,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
     var profiles: [RoutingProfile] = []
     var groups: [RoutingGroup] = []
     var applications: [RoutedApplication] = []
+    var commands: [RoutedCommand] = []
     var singBoxAlwaysOn = true
     var serviceStartsAtBoot = true
     var globalStartupKillSwitch = true
@@ -171,7 +191,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
     var clientConnections: [ClientConnection] = []
 
     private enum CodingKeys: String, CodingKey {
-        case profiles, groups, applications, singBoxAlwaysOn, serviceStartsAtBoot
+        case profiles, groups, applications, commands, singBoxAlwaysOn, serviceStartsAtBoot
         case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProxyEnabled, selfProxySeeded, redirects, clientConnections
     }
 
@@ -179,6 +199,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         profiles: [RoutingProfile] = [],
         groups: [RoutingGroup] = [],
         applications: [RoutedApplication] = [],
+        commands: [RoutedCommand] = [],
         singBoxAlwaysOn: Bool = true,
         serviceStartsAtBoot: Bool = true,
         globalStartupKillSwitch: Bool = true,
@@ -190,6 +211,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         self.profiles = profiles
         self.groups = groups
         self.applications = applications
+        self.commands = commands
         self.singBoxAlwaysOn = singBoxAlwaysOn
         self.serviceStartsAtBoot = serviceStartsAtBoot
         self.globalStartupKillSwitch = globalStartupKillSwitch
@@ -204,6 +226,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         profiles = try values.decodeIfPresent([RoutingProfile].self, forKey: .profiles) ?? []
         groups = try values.decodeIfPresent([RoutingGroup].self, forKey: .groups) ?? []
         applications = try values.decodeIfPresent([RoutedApplication].self, forKey: .applications) ?? []
+        commands = try values.decodeIfPresent([RoutedCommand].self, forKey: .commands) ?? []
         singBoxAlwaysOn = try values.decodeIfPresent(Bool.self, forKey: .singBoxAlwaysOn) ?? true
         serviceStartsAtBoot = try values.decodeIfPresent(Bool.self, forKey: .serviceStartsAtBoot) ?? true
         globalStartupKillSwitch = try values.decodeIfPresent(Bool.self, forKey: .globalStartupKillSwitch) ?? true

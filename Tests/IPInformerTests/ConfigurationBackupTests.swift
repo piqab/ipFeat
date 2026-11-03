@@ -15,6 +15,7 @@ final class ConfigurationBackupTests: XCTestCase {
                 bundleIdentifier: "example.editor", groupID: nil, profileID: removed.id,
                 enabled: true, launchAfterEngineReady: false
             )],
+            commands: [RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh", profileID: removed.id)],
             mainConfigurationJSON: """
             {"outbounds":[{"type":"direct","tag":"direct"},{"type":"direct","tag":"proxy"},{"type":"direct","tag":"vps-test"}],"route":{"final":"direct"}}
             """,
@@ -29,6 +30,7 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertEqual(result.defaultRoute, .outbound("proxy"))
         XCTAssertEqual(result.groups[0].profileID, replacement.id)
         XCTAssertEqual(result.applications[0].profileID, replacement.id)
+        XCTAssertEqual(result.commands[0].profileID, replacement.id)
         XCTAssertTrue(result.clientConnections.isEmpty)
         XCTAssertFalse(result.profiles.contains(where: { $0.id == removed.id }))
         XCTAssertFalse(result.mainConfigurationJSON.contains("vps-test"))
@@ -92,6 +94,7 @@ final class ConfigurationBackupTests: XCTestCase {
 
     func testEncryptedBackupRoundTripRejectsWrongPasswordAndTampering() throws {
         var routing = RoutingConfiguration(defaultRoute: .outbound("proxy"))
+        routing.commands = [RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh")]
         let connection = ClientConnection(name: "VPS", outboundTag: "server-test",
                                           serverIPv4: "203.0.113.10", protocolName: "vless",
                                           singBoxVersion: "1.12.0")
@@ -115,6 +118,7 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertEqual(decoded.configurationHistory.first?.json, backup.configurationHistory.first?.json)
         XCTAssertEqual(decoded.engineAutoInstall, true)
         XCTAssertEqual(decoded.routing.clientConnections, [connection])
+        XCTAssertEqual(decoded.routing.commands, routing.commands)
         XCTAssertEqual(decoded.serverConfigurations, backup.serverConfigurations)
         XCTAssertThrowsError(try ConfigurationArchive.decrypt(encrypted, password: "wrong password"))
 
@@ -142,6 +146,13 @@ final class ConfigurationBackupTests: XCTestCase {
         let result = RoutingStore.prepareRestoredConfiguration(RoutingConfiguration(applications: [app]))
         XCTAssertEqual(result.missingApplications, ["Missing"])
         XCTAssertFalse(result.configuration.applications[0].enabled)
+    }
+
+    @MainActor func testMissingCommandIsDisabledDuringRestore() {
+        let missing = RoutedCommand(name: "missing", executablePath: "/usr/bin/ipinformer-missing-command")
+        let result = RoutingStore.prepareRestoredConfiguration(RoutingConfiguration(commands: [missing]))
+        XCTAssertEqual(result.missingApplications, ["Команда: missing"])
+        XCTAssertFalse(result.configuration.commands[0].enabled)
     }
 
     @MainActor func testBatchImportSkipsAppAlreadyInAnotherGroup() throws {

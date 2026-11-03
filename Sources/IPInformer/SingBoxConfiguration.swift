@@ -144,6 +144,10 @@ enum SingBoxConfigurationGenerator {
             configuration: configuration, enabledApps: enabledApps,
             localNetworks: connectedNetworks
         )
+        let commandRules = try commandRules(
+            configuration: configuration, availableTags: availableTags,
+            localNetworks: connectedNetworks
+        )
         let localRules = localAccessRules(
             blockedApps: blockedApps,
             localOnlyApps: localOnlyApps,
@@ -168,7 +172,7 @@ enum SingBoxConfigurationGenerator {
             ["inbound": [managedInboundTag], "ip_version": 6, "port": [53], "action": "hijack-dns"],
             ["ip_version": 6, "action": "reject"]
         ]
-        route["rules"] = ipv6Rules + updaterRule + probeRules + redirects + localRules + webKitRules + managedRules
+        route["rules"] = ipv6Rules + updaterRule + probeRules + redirects + commandRules + localRules + webKitRules + managedRules
             + infrastructureRules + defaultRules + originalRules
         route["find_process"] = true
         root["route"] = route
@@ -290,6 +294,62 @@ enum SingBoxConfigurationGenerator {
         }
         if !blockedApps.isEmpty {
             rules.append(["process_path_regex": patterns(blockedApps), "action": "reject"])
+        }
+        return rules
+    }
+
+    private static func commandRules(
+        configuration: RoutingConfiguration,
+        availableTags: Set<String>,
+        localNetworks: [LocalIPv4Network]
+    ) throws -> [[String: Any]] {
+        var rules: [[String: Any]] = []
+        let privateIPv4 = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
+                           "192.168.0.0/16", "169.254.0.0/16", "224.0.0.251/32"]
+        for command in configuration.commands where command.enabled {
+            guard command.executablePath.hasPrefix("/"), !command.executablePath.contains(".app/") else {
+                throw RoutingConfigurationError.noExecutable(command.name)
+            }
+            let url = URL(fileURLWithPath: command.executablePath).standardizedFileURL
+            let paths = Array(Set([url.path, url.resolvingSymlinksInPath().path])).sorted()
+            let process: [String: Any] = ["process_path": paths]
+            let profile: RoutingProfile?
+            if let profileID = command.profileID {
+                guard let selected = configuration.profiles.first(where: { $0.id == profileID }) else {
+                    throw RoutingConfigurationError.missingProfile(command.name)
+                }
+                profile = selected
+            } else {
+                profile = nil
+            }
+            if command.allowLocalNetwork || profile?.kind == .localNetwork {
+                for network in localNetworks {
+                    rules.append(process.merging([
+                        "ip_cidr": [network.cidr], "action": "route", "outbound": network.outboundTag
+                    ]) { _, new in new })
+                }
+                rules.append(process.merging([
+                    "ip_cidr": privateIPv4, "action": "route", "outbound": localDirectTag
+                ]) { _, new in new })
+            }
+            guard let profile else { continue }
+            switch profile.kind {
+            case .outbound:
+                let tag = profile.outboundTag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard availableTags.contains(tag) else { throw RoutingConfigurationError.unknownOutbound(tag) }
+                rules.append(process.merging(["action": "route", "outbound": tag]) { _, new in new })
+            case .localOnly:
+                if !command.allowLocalNetwork {
+                    rules.append(process.merging([
+                        "ip_cidr": ["127.0.0.0/8"], "action": "route", "outbound": localDirectTag
+                    ]) { _, new in new })
+                }
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+            case .localNetwork:
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+            case .block:
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+            }
         }
         return rules
     }
