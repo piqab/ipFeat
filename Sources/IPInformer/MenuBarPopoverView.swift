@@ -128,10 +128,25 @@ struct MenuBarPopoverView: View {
             ) {
                 HStack(spacing: Self.iconSpacing) {
                     ForEach(row.applications) { application in
-                        ApplicationMenuIconButton(application: application) {
-                            store.launch(application)
-                            close()
-                        }
+                        ApplicationMenuIconButton(
+                            application: application,
+                            groups: store.configuration.groups,
+                            action: {
+                                store.launch(application)
+                                close()
+                            },
+                            onMove: { groupID in
+                                guard var current = store.configuration.applications.first(where: { $0.id == application.id }) else { return }
+                                current.groupID = groupID
+                                store.updateApplication(current)
+                                close()
+                            },
+                            onDelete: {
+                                guard let current = store.configuration.applications.first(where: { $0.id == application.id }) else { return }
+                                store.removeApplication(current)
+                                close()
+                            }
+                        )
                         .frame(width: Self.iconWidth, height: 36)
                     }
                 }
