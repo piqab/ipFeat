@@ -13,6 +13,7 @@ final class RoutingStore: ObservableObject {
     @Published private(set) var generatedConfigPath: String = ""
     @Published private(set) var validationMessage = "Добавьте профиль и программу"
     @Published private(set) var runtimeMessage = "Системная служба ещё не установлена"
+    @Published private(set) var applicationActionMessage = ""
     @Published private(set) var routeAddresses: [String: String] = [:]
     @Published private(set) var checkingRouteTags: Set<String> = []
     @Published private(set) var configurationHistory: [ConfigurationRevision] = []
@@ -585,27 +586,33 @@ final class RoutingStore: ObservableObject {
 
     func launch(_ application: RoutedApplication) {
         guard application.enabled else {
-            runtimeMessage = "Сначала включите \(application.name): её профиль сейчас не применяется"
+            applicationActionMessage = "Сначала включите \(application.name): её профиль сейчас не применяется"
             return
         }
-        if let bundleID = application.bundleIdentifier,
-           !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
-            runtimeMessage = "Закройте \(application.name) и запустите её через IP Informer"
+        let selectedPath = URL(fileURLWithPath: application.bundlePath).standardizedFileURL.path
+        let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleURL?.standardizedFileURL.path == selectedPath
+        }) ?? application.bundleIdentifier.flatMap {
+            NSRunningApplication.runningApplications(withBundleIdentifier: $0).first
+        }
+        if let running {
+            let activated = running.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            applicationActionMessage = activated ? "\(application.name) открыта" : "Не удалось переключиться на \(application.name)"
             return
         }
         guard validationMessage.hasPrefix("Конфигурация готова") else {
-            runtimeMessage = "Сначала исправьте конфигурацию маршрутизации"
+            applicationActionMessage = "Сначала исправьте конфигурацию маршрутизации"
             return
         }
         guard FileManager.default.fileExists(atPath: application.bundlePath) else {
-            runtimeMessage = "Программа больше не найдена: \(application.bundlePath)"
+            applicationActionMessage = "Программа больше не найдена: \(application.bundlePath)"
             return
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: application.bundlePath), configuration: configuration) { [weak self] _, error in
             Task { @MainActor in
-                self?.runtimeMessage = error == nil ? "\(application.name) запущена" : "Ошибка запуска: \(error!.localizedDescription)"
+                self?.applicationActionMessage = error == nil ? "\(application.name) запущена" : "Ошибка запуска: \(error!.localizedDescription)"
             }
         }
     }

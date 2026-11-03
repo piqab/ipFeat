@@ -4,6 +4,10 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/AppIcon.icns</key>
+		<data>
+		xVM3fy/HH2jMwKcX3JCVPWjs3XA=
+		</data>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<data>
 		yNUiezX17l68u6asiN72yB0TURw=
@@ -39,6 +43,13 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"33332c740c735eeb03077b6e9a693c0e2050a2c1"</string>
+		</dict>
+		<key>Resources/AppIcon.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			/cakepdozAZEwB4kgFxYIWzpP2G+cyLt0VEO3j1D6VU=
+			</data>
 		</dict>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<dict>

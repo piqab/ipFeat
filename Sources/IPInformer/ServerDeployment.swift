@@ -183,6 +183,7 @@ enum ServerDeployment {
         "$work/\(member)" check -c "$work/config.json"
         created=1
         install -d -m 755 /usr/local/lib/ipinformer-sing-box /etc/ipinformer-sing-box
+        install -d -m 700 /etc/ipinformer-sing-box/acme
         install -m 755 "$work/\(member)" /usr/local/lib/ipinformer-sing-box/sing-box
         install -m 600 "$work/config.json" /etc/ipinformer-sing-box/config.json
         test -x /usr/local/lib/ipinformer-sing-box/sing-box

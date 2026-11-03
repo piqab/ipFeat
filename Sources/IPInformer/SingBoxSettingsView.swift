@@ -7,8 +7,9 @@ private enum ArchiveMode: String, Identifiable {
     var id: String { rawValue }
 }
 
-private struct ServerConfigDisplay: Identifiable {
+private struct ConnectionConfigDisplay: Identifiable {
     let id = UUID()
+    let title: String
     let json: String
 }
 
@@ -22,6 +23,8 @@ struct SingBoxSettingsView: View {
     @StateObject private var engine = EngineManager()
     @State private var draft = ""
     @State private var draftBaseline = ""
+    @State private var editorExpanded = false
+    @State private var manualCheckMessage: String?
     @State private var diffCandidate = ""
     @State private var diffIsHistory = false
     @State private var showDiff = false
@@ -34,7 +37,8 @@ struct SingBoxSettingsView: View {
     @State private var missingApplications: [String] = []
     @State private var archiveError: String?
     @State private var showNewServerWizard = false
-    @State private var displayedServerConfig: ServerConfigDisplay?
+    @State private var displayedConnectionConfig: ConnectionConfigDisplay?
+    @State private var connectionJSONError: String?
     @State private var connectionToRemove: ClientConnection?
     @State private var connectionToShare: ClientConnection?
 
@@ -56,6 +60,7 @@ struct SingBoxSettingsView: View {
             .padding(20)
         }
         .onAppear {
+            editorExpanded = false
             if draft.isEmpty {
                 draft = store.configuration.mainConfigurationJSON
                 draftBaseline = draft
@@ -66,7 +71,10 @@ struct SingBoxSettingsView: View {
         .onChange(of: store.configuration.mainConfigurationJSON) { updated in
             if draft == draftBaseline { draft = updated }
             draftBaseline = updated
+            manualCheckMessage = nil
         }
+        .onChange(of: store.configuration) { _ in manualCheckMessage = nil }
+        .onChange(of: store.validationMessage) { _ in manualCheckMessage = nil }
         .task {
             while !Task.isCancelled {
                 engine.refreshLocalState()
@@ -90,11 +98,15 @@ struct SingBoxSettingsView: View {
         }
         .sheet(item: $archiveMode) { mode in archiveSheet(mode) }
         .sheet(isPresented: $showNewServerWizard) { NewServerWizardView(store: store) }
-        .sheet(item: $displayedServerConfig) { item in
-            ScrollView {
-                Text(item.json).font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
+        .sheet(item: $displayedConnectionConfig) { item in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(item.title).font(.headline)
+                ScrollView {
+                    Text(item.json).font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .padding()
             .frame(width: 700, height: 550)
         }
         .sheet(item: $connectionToRemove) { connection in
@@ -112,14 +124,7 @@ struct SingBoxSettingsView: View {
                 get: { store.configuration.singBoxAlwaysOn },
                 set: { store.setAlwaysOn($0) }
             ))
-            HStack {
-                Label(store.validationMessage, systemImage: store.generatedConfigPath.isEmpty ? "exclamationmark.triangle" : "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(store.generatedConfigPath.isEmpty ? .red : .secondary)
-                Spacer()
-                Button("Проверить через sing-box") { store.validateWithInstalledSingBox() }
-            }
-            Text(store.runtimeMessage).font(.caption).foregroundStyle(.secondary)
+            Text(store.validationMessage).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -211,6 +216,9 @@ struct SingBoxSettingsView: View {
                 Text("Создайте новый VPS: клиентский конфиг добавится сюда и станет доступен для программ, групп и общего маршрута.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let connectionJSONError {
+                Text(connectionJSONError).font(.caption).foregroundStyle(.red)
+            }
             ForEach(store.configuration.clientConnections) { connection in
                 HStack {
                     VStack(alignment: .leading) {
@@ -225,13 +233,26 @@ struct SingBoxSettingsView: View {
                         Button("Сделать общим") { store.activateClientConnection(connection.id) }
                     }
                     Button("Поделиться QRS") { connectionToShare = connection }
+                    Button("Клиентский JSON") {
+                        do {
+                            let json = try ClientQRS.androidConfiguration(
+                                connection: connection,
+                                mainJSON: store.configuration.mainConfigurationJSON
+                            )
+                            displayedConnectionConfig = ConnectionConfigDisplay(
+                                title: "Клиентский JSON · \(connection.name)", json: json
+                            )
+                            connectionJSONError = nil
+                        } catch {
+                            connectionJSONError = error.localizedDescription
+                        }
+                    }
                     Button("Серверный JSON") {
-                        displayedServerConfig = ServerSecretStore.load(id: connection.id).map {
-                            ServerConfigDisplay(json: $0)
+                        displayedConnectionConfig = ServerSecretStore.load(id: connection.id).map {
+                            ConnectionConfigDisplay(title: "Серверный JSON · \(connection.name)", json: $0)
                         }
-                        if displayedServerConfig == nil {
-                            store.reportRuntimeError("Серверный конфиг не найден в Keychain")
-                        }
+                        connectionJSONError = displayedConnectionConfig == nil
+                            ? "Серверный конфиг не найден в Keychain" : nil
                     }
                     Button("Удалить…", role: .destructive) { connectionToRemove = connection }
                 }
@@ -242,34 +263,59 @@ struct SingBoxSettingsView: View {
     }
 
     private var editorSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Основная конфигурация sing-box").font(.headline)
-            Text("Здесь находятся DNS, outbounds и общие правила. Перед сохранением показываются изменения; успешная версия попадает в историю.")
-                .font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $draft)
-                .font(.system(.caption, design: .monospaced))
-                .frame(minHeight: 230)
-                .border(Color.secondary.opacity(0.25))
-            HStack {
-                Text("Outbounds: \(store.outboundTags.joined(separator: ", "))")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Button("Вернуть сохранённую") {
-                    draft = store.configuration.mainConfigurationJSON
-                    draftBaseline = draft
+        DisclosureGroup(isExpanded: $editorExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Здесь находятся DNS, outbounds и общие правила. Перед сохранением показываются изменения; успешная версия попадает в историю.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextEditor(text: $draft)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 230)
+                    .border(Color.secondary.opacity(0.25))
+                HStack {
+                    Text("Outbounds: \(store.outboundTags.joined(separator: ", "))")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Проверить через sing-box") {
+                        store.validateWithInstalledSingBox()
+                        manualCheckMessage = store.runtimeMessage
+                    }
+                    .help("Проверяет сохранённую итоговую конфигурацию, включая правила программ")
                 }
-                Button("Загрузить JSON…") { chooseJSON() }
-                Button("Сравнить и сохранить") {
-                    diffCandidate = draft
-                    diffIsHistory = false
-                    showDiff = true
+                HStack {
+                    Spacer()
+                    Button("Вернуть сохранённую") {
+                        draft = store.configuration.mainConfigurationJSON
+                        draftBaseline = draft
+                    }
+                    Button("Загрузить JSON…") { chooseJSON() }
+                    Button("Сравнить и сохранить") {
+                        diffCandidate = draft
+                        diffIsHistory = false
+                        showDiff = true
+                    }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(draft == store.configuration.mainConfigurationJSON)
                 }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draft == store.configuration.mainConfigurationJSON)
+            }
+            .padding(.top, 8)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Основная конфигурация sing-box").font(.headline)
+                Label(editorStatus,
+                      systemImage: editorStatusPassed ? "checkmark.circle" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(editorStatusPassed ? Color.secondary : Color.red)
             }
         }
+    }
+
+    private var editorStatus: String { manualCheckMessage ?? store.validationMessage }
+
+    private var editorStatusPassed: Bool {
+        if let manualCheckMessage { return manualCheckMessage == "sing-box: конфигурация корректна" }
+        return store.validationMessage.hasPrefix("Конфигурация готова")
     }
 
     private var historySection: some View {

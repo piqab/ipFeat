@@ -11,6 +11,13 @@ struct NewServerWizardView: View {
     @State private var host = ""
     @State private var servicePort = "443"
     @State private var handshakeHost = ""
+    @State private var tlsMode = "acme"
+    @State private var tlsDomain = ""
+    @State private var tlsEmail = ""
+    @State private var certificatePEM = ""
+    @State private var keyPEM = ""
+    @State private var certificateName = ""
+    @State private var keyName = ""
     @State private var sshUser = "root"
     @State private var sshPort = "22"
     @State private var identityFile = ""
@@ -29,6 +36,7 @@ struct NewServerWizardView: View {
 
     private var selectedOption: ServerProtocolOption? { options.first { $0.id == protocolID } }
     private var binary: String? { NewServerConfiguration.availableBinary() }
+    private var requiresTLS: Bool { ["trojan", "hysteria2", "anytls"].contains(selectedOption?.name ?? "") }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -50,7 +58,7 @@ struct NewServerWizardView: View {
                             HStack {
                                 Picker("Технология", selection: $protocolID) {
                                     ForEach(options) { option in
-                                        Text("\(option.kind.rawValue) · \(option.name)").tag(option.id)
+                                        Text(option.name + (option.isAutomatic ? "" : " · вручную")).tag(option.id)
                                     }
                                 }
                                 .frame(width: 270)
@@ -58,10 +66,32 @@ struct NewServerWizardView: View {
                                     TextField("Домен TLS-сайта для Reality", text: $handshakeHost)
                                 }
                             }
+                            if requiresTLS {
+                                Picker("Сертификат TLS", selection: $tlsMode) {
+                                    Text("ACME").tag("acme")
+                                    Text("PEM-файлы").tag("pem")
+                                }
+                                .pickerStyle(.segmented)
+                                TextField("Домен сервера TLS", text: $tlsDomain)
+                                if tlsMode == "acme" {
+                                    TextField("Email для ACME", text: $tlsEmail)
+                                    Text("DNS A-запись домена должна вести на публичный IPv4 VPS. Откройте на VPS порты 80 и 443 для получения сертификата ACME; для Hysteria2 откройте также выбранный UDP-порт.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else {
+                                    HStack {
+                                        Button("Выбрать сертификат PEM…") { choosePEM(certificate: true) }
+                                        Text(certificateName.isEmpty ? "Не выбран" : certificateName)
+                                        Button("Выбрать закрытый ключ PEM…") { choosePEM(certificate: false) }
+                                        Text(keyName.isEmpty ? "Не выбран" : keyName)
+                                    }
+                                    Text("PEM будет встроен в серверный JSON; сертификат также войдёт в клиентский outbound для проверки TLS. Отдельные файлы на VPS не потребуются.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                             if let option = selectedOption {
                                 Text(option.isAutomatic
                                      ? "Для этого протокола ключи и параметры пары создаются автоматически."
-                                     : "Расширенный режим по схеме этой версии: заполните оба JSON. Поля: \(option.fields.joined(separator: ", ")). Некоторые технологии не образуют пару клиент–сервер.")
+                                     : "Ручной режим: черновики содержат только адрес и тип. Добавьте обязательные поля в оба JSON и проверьте их локально. Поля: \(option.fields.joined(separator: ", ")).")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Button("Создать черновики клиента и сервера") { generate() }
@@ -135,11 +165,14 @@ struct NewServerWizardView: View {
         .onChange(of: servicePort) { _ in validated = false }
         .onChange(of: protocolID) { _ in validated = false }
         .onChange(of: handshakeHost) { _ in validated = false }
+        .onChange(of: tlsMode) { _ in validated = false }
+        .onChange(of: tlsDomain) { _ in validated = false }
+        .onChange(of: tlsEmail) { _ in validated = false }
         .sheet(isPresented: $showDeploymentLog) { ServerDeploymentLogView(model: deploymentLog) }
         .onAppear {
             engine.refreshLocalState()
             if let binary {
-                do { options = try NewServerConfiguration.protocolOptions(binary: binary) }
+                do { options = try NewServerConfiguration.protocolOptions(binary: binary).filter { $0.kind == .inbound && $0.hasClientOutbound } }
                 catch { status = "Ошибка схемы: \(error.localizedDescription)" }
             }
             Task { await engine.refreshReleases() }
@@ -154,6 +187,25 @@ struct NewServerWizardView: View {
         identityFile = url.path
     }
 
+    private func choosePEM(certificate: Bool) {
+        let panel = NSOpenPanel()
+        panel.title = certificate ? "Выберите сертификат TLS в PEM" : "Выберите закрытый ключ TLS в PEM"
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let data = try Data(contentsOf: url)
+            guard data.count <= 1_000_000, let pem = String(data: data, encoding: .utf8) else {
+                throw NSError(domain: "IPInformer", code: 26, userInfo: [NSLocalizedDescriptionKey: "Ожидается текстовый PEM-файл размером до 1 МБ"])
+            }
+            if certificate { certificatePEM = pem; certificateName = url.lastPathComponent }
+            else { keyPEM = pem; keyName = url.lastPathComponent }
+            validated = false
+            status = "PEM-файл загружен: \(url.lastPathComponent)"
+        } catch { status = "Ошибка PEM: \(error.localizedDescription)" }
+    }
+
     private func generate() {
         guard let binary, let port = Int(servicePort), let option = selectedOption else {
             status = "Ошибка: некорректный порт или sing-box не установлен"
@@ -165,9 +217,14 @@ struct NewServerWizardView: View {
             guard version == engine.installedVersion else {
                 throw NSError(domain: "IPInformer", code: 24, userInfo: [NSLocalizedDescriptionKey: "Версия бинарника sing-box не совпадает с установленной версией. Обновите состояние движка."])
             }
+            let tlsSource: ServerTLSSource? = requiresTLS
+                ? (tlsMode == "acme" ? .acme(domain: tlsDomain, email: tlsEmail)
+                   : .certificate(domain: tlsDomain, certificatePEM: certificatePEM, keyPEM: keyPEM))
+                : nil
             let pair = try NewServerConfiguration.generate(
                 name: name, serverIPv4: host, port: port,
-                protocolName: option.name, handshakeHost: handshakeHost, kind: option.kind, binary: binary
+                protocolName: option.name, handshakeHost: handshakeHost, kind: option.kind, binary: binary,
+                tlsSource: tlsSource
             )
             serverJSON = pair.serverConfigurationJSON
             clientJSON = pair.clientOutboundJSON

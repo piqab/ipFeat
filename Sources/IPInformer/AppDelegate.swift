@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 @MainActor
@@ -11,16 +10,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var panelsByScreen: [String: NSPanel] = [:]
     private var statusItem: NSStatusItem?
-    private var addressMenuItem: NSMenuItem?
-    private var toggleWidgetItem: NSMenuItem?
+    private let statusPopover = NSPopover()
     private var settingsWindow: NSWindow?
     private var widgetsVisible: Bool = {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: AppDelegate.widgetsVisibleKey) != nil else { return true }
         return defaults.bool(forKey: AppDelegate.widgetsVisibleKey)
     }()
-    private var cancellables = Set<AnyCancellable>()
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         synchronizePanels()
@@ -36,10 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         monitor.onAddressChange = { [weak self] oldAddress, newAddress in
             self?.announceChange(from: oldAddress, to: newAddress)
         }
-        monitor.$ipv4
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateStatusItem() }
-            .store(in: &cancellables)
         monitor.start()
         routingStore.startRouteMonitoring { [weak monitor = monitor] in
             monitor?.sources ?? []
@@ -118,36 +110,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func createStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "network", accessibilityDescription: "IP Informer")
-
-        let menu = NSMenu()
-        let addressItem = NSMenuItem(title: "IP Informer", action: nil, keyEquivalent: "")
-        addressItem.isEnabled = false
-        menu.addItem(addressItem)
-        addressMenuItem = addressItem
-        menu.addItem(.separator())
-
-        let checkItem = NSMenuItem(title: "Проверить сейчас", action: #selector(checkNow), keyEquivalent: "r")
-        checkItem.target = self
-        menu.addItem(checkItem)
-
-        let toggleTitle = widgetsVisible ? "Скрыть виджеты" : "Показать виджеты"
-        let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleWidget), keyEquivalent: "h")
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-        toggleWidgetItem = toggleItem
-
-        let settingsItem = NSMenuItem(title: "Настройки…", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Завершить IP Informer", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quitItem)
-
-        item.menu = menu
+        item.button?.image = menuBarIcon()
+        item.button?.imagePosition = .imageOnly
+        item.button?.toolTip = "IP Informer"
+        item.button?.target = self
+        item.button?.action = #selector(toggleStatusPopover)
+        statusPopover.behavior = .transient
         statusItem = item
-        updateStatusItem()
+    }
+
+    private func menuBarIcon() -> NSImage? {
+        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let image = NSImage(contentsOf: url) else {
+            return NSImage(systemSymbolName: "network", accessibilityDescription: "IP Informer")
+        }
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }
+
+    @objc private func toggleStatusPopover() {
+        guard let button = statusItem?.button else { return }
+        if statusPopover.isShown {
+            statusPopover.performClose(nil)
+            return
+        }
+        let visibleApps = routingStore.configuration.applications.filter {
+            $0.bundleIdentifier != RoutingStore.selfBundleIdentifier
+        }
+        let groupIDs = Set(routingStore.configuration.groups.map(\.id))
+        let nonEmptyGroups = routingStore.configuration.groups.filter { group in
+            visibleApps.contains(where: { $0.groupID == group.id })
+        }.count
+        let hasUngrouped = visibleApps.contains { application in
+            guard let id = application.groupID else { return true }
+            return !groupIDs.contains(id)
+        }
+        let rowCount = nonEmptyGroups + (hasUngrouped ? 1 : 0)
+        let content = MenuBarPopoverView(
+            store: routingStore, widgetsVisible: widgetsVisible,
+            checkNow: { [weak self] in self?.checkNow() },
+            toggleWidgets: { [weak self] in self?.toggleWidget() },
+            openSettings: { [weak self] in self?.openSettings() },
+            quit: { NSApp.terminate(nil) },
+            close: { [weak self] in self?.statusPopover.performClose(nil) }
+        )
+        statusPopover.contentViewController = NSHostingController(rootView: content)
+        statusPopover.contentSize = NSSize(width: 340, height: MenuBarPopoverView.preferredHeight(rowCount: rowCount))
+        statusPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     @objc private func checkNow() {
@@ -164,8 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 panel.orderOut(nil)
             }
         }
-        toggleWidgetItem?.title = widgetsVisible ? "Скрыть виджеты" : "Показать виджеты"
-        updateStatusItem()
     }
 
     @objc private func screenParametersDidChange() {
@@ -224,20 +231,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         monitor.flash()
     }
 
-    private func updateStatusItem() {
-        guard let statusItem, let button = statusItem.button else { return }
-        addressMenuItem?.title = "IPv4: \(monitor.ipv4)"
-        button.toolTip = "IP Informer — \(monitor.ipv4)"
-
-        if widgetsVisible {
-            statusItem.length = NSStatusItem.squareLength
-            button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "IP Informer")
-            button.title = ""
-        } else {
-            let firstOctet = monitor.ipv4.split(separator: ".").first.map(String.init)
-            statusItem.length = NSStatusItem.variableLength
-            button.image = nil
-            button.title = firstOctet ?? "IP"
-        }
-    }
 }

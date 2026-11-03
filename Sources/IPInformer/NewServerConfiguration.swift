@@ -8,7 +8,14 @@ struct ServerProtocolOption: Identifiable, Hashable {
     let fields: [String]
     let hasClientOutbound: Bool
     var id: String { "\(kind.rawValue):\(name)" }
-    var isAutomatic: Bool { kind == .inbound && ["vless", "shadowsocks", "vmess"].contains(name) }
+    var isAutomatic: Bool {
+        kind == .inbound && ["vless", "shadowsocks", "vmess", "trojan", "hysteria2", "anytls"].contains(name)
+    }
+}
+
+enum ServerTLSSource {
+    case certificate(domain: String, certificatePEM: String, keyPEM: String)
+    case acme(domain: String, email: String)
 }
 
 struct GeneratedServerPair {
@@ -62,10 +69,11 @@ enum NewServerConfiguration {
 
     static func generate(name: String, serverIPv4: String, port: Int, protocolName: String,
                          handshakeHost: String, kind: ServerProtocolOption.Kind = .inbound,
-                         binary: String) throws -> GeneratedServerPair {
+                         binary: String, tlsSource: ServerTLSSource? = nil) throws -> GeneratedServerPair {
         guard isIPv4(serverIPv4), (1...65535).contains(port) else {
             throw NSError(domain: "IPInformer", code: 11, userInfo: [NSLocalizedDescriptionKey: "Укажите публичный IPv4 и порт 1–65535"])
         }
+        guard kind == .inbound else { throw error("Endpoint не является готовой парой клиент–сервер") }
         let tag = "server-" + UUID().uuidString.lowercased().prefix(8)
         let inbound: [String: Any]
         let outbound: [String: Any]
@@ -115,6 +123,25 @@ enum NewServerConfiguration {
                        "listen_port": port, "users": [["name": "ipinformer", "uuid": uuid, "alterId": 0]]]
             outbound = ["type": "vmess", "tag": tag, "server": serverIPv4,
                         "server_port": port, "uuid": uuid, "security": "auto", "alter_id": 0]
+        case "trojan", "hysteria2", "anytls":
+            guard let tlsSource else { throw error("Выберите сертификат TLS или ACME для \(protocolName)") }
+            let tls = try tlsConfiguration(tlsSource, singBoxVersion: try binaryVersion(binary: binary))
+            let password = Data((0..<32).map { _ in UInt8.random(in: .min ... .max) }).base64EncodedString()
+            let serverInbound: [String: Any] = [
+                "type": protocolName, "tag": "server-in", "listen": "0.0.0.0",
+                "listen_port": port, "users": [["name": "ipinformer", "password": password]],
+                "tls": tls.server
+            ]
+            var clientOutbound: [String: Any] = [
+                "type": protocolName, "tag": tag, "server": serverIPv4,
+                "server_port": port, "password": password, "tls": tls.client
+            ]
+            if protocolName == "hysteria2" {
+                // Hysteria2 uses UDP. Keep the generated transport explicit in the UI.
+                clientOutbound["network"] = "udp"
+            }
+            inbound = serverInbound
+            outbound = clientOutbound
         default:
             inbound = ["type": protocolName, "tag": "server-in", "listen": "0.0.0.0", "listen_port": port]
             outbound = ["type": protocolName, "tag": tag, "server": serverIPv4, "server_port": port]
@@ -125,11 +152,7 @@ enum NewServerConfiguration {
             "outbounds": [["type": "direct", "tag": "direct"]],
             "route": ["final": "direct"]
         ]
-        if kind == .endpoint {
-            server["endpoints"] = [["type": protocolName, "tag": "server-endpoint"]]
-        } else {
-            server["inbounds"] = [inbound]
-        }
+        server["inbounds"] = [inbound]
         let serverJSON = try pretty(server)
         let outboundJSON = try pretty(outbound)
         return GeneratedServerPair(clientOutboundJSON: outboundJSON,
@@ -137,6 +160,12 @@ enum NewServerConfiguration {
     }
 
     static func validate(serverJSON: String, outboundJSON: String, binary: String) throws {
+        guard let serverObject = try JSONSerialization.jsonObject(with: Data(serverJSON.utf8)) as? [String: Any],
+              let outboundObject = try JSONSerialization.jsonObject(with: Data(outboundJSON.utf8)) as? [String: Any] else {
+            throw error("Серверный и клиентский JSON должны быть объектами")
+        }
+        try rejectExternalFiles(in: serverObject)
+        try rejectExternalFiles(in: outboundObject)
         let serverURL = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-server-\(UUID().uuidString).json")
         let clientURL = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-client-\(UUID().uuidString).json")
         defer {
@@ -187,6 +216,58 @@ enum NewServerConfiguration {
         value.count <= 253 && value.contains(".") && value.range(
             of: #"^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"#, options: .regularExpression
         ) != nil
+    }
+
+    private static func tlsConfiguration(_ source: ServerTLSSource,
+                                         singBoxVersion: String) throws -> (server: [String: Any], client: [String: Any]) {
+        switch source {
+        case .certificate(let domain, let certificatePEM, let keyPEM):
+            guard validHostname(domain), certificatePEM.contains("-----BEGIN CERTIFICATE-----"),
+                  keyPEM.contains("-----BEGIN PRIVATE KEY-----") ||
+                  keyPEM.contains("-----BEGIN RSA PRIVATE KEY-----") ||
+                  keyPEM.contains("-----BEGIN EC PRIVATE KEY-----") else {
+                throw error("Укажите домен и действительные PEM-файлы сертификата и закрытого ключа")
+            }
+            let certLines = certificatePEM.split(whereSeparator: \.isNewline).map(String.init)
+            let keyLines = keyPEM.split(whereSeparator: \.isNewline).map(String.init)
+            return (["enabled": true, "server_name": domain, "certificate": certLines, "key": keyLines],
+                    ["enabled": true, "server_name": domain, "certificate": certLines])
+        case .acme(let domain, let email):
+            guard validHostname(domain), email.contains("@"), !email.contains(" ") else {
+                throw error("Для ACME укажите домен и адрес электронной почты")
+            }
+            let parts = singBoxVersion.split(separator: ".")
+            guard parts.count >= 2, let major = Int(parts[0]), let minor = Int(parts[1]) else {
+                throw error("Не удалось определить поддержку ACME в версии sing-box \(singBoxVersion)")
+            }
+            let fields: [String: Any] = ["domain": [domain], "email": email,
+                                         "data_directory": "/etc/ipinformer-sing-box/acme"]
+            var serverTLS: [String: Any] = ["enabled": true, "server_name": domain]
+            if major > 1 || (major == 1 && minor >= 14) {
+                serverTLS["certificate_provider"] = fields.merging(["type": "acme"]) { _, new in new }
+            } else {
+                serverTLS["acme"] = fields
+            }
+            return (serverTLS, ["enabled": true, "server_name": domain])
+        }
+    }
+
+    private static func error(_ message: String) -> NSError {
+        NSError(domain: "IPInformer.NewServerConfiguration", code: 25,
+                userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private static func rejectExternalFiles(in value: Any) throws {
+        if let object = value as? [String: Any] {
+            for (key, child) in object {
+                if key.hasSuffix("_path"), let path = child as? String, !path.isEmpty {
+                    throw error("В JSON указан внешний файл \(key): \(path). Встроите сертификат или другие данные в JSON перед установкой")
+                }
+                try rejectExternalFiles(in: child)
+            }
+        } else if let array = value as? [Any] {
+            for child in array { try rejectExternalFiles(in: child) }
+        }
     }
 
     private static func pretty(_ object: Any) throws -> String {

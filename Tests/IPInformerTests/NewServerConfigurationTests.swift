@@ -39,6 +39,59 @@ final class NewServerConfigurationTests: XCTestCase {
         }
     }
 
+    func testTLSProtocolsGenerateValidACMEPairsAndRejectMissingFiles() throws {
+        guard let binary = NewServerConfiguration.availableBinary() else { throw XCTSkip("sing-box unavailable") }
+        let protocols = try NewServerConfiguration.protocolOptions(binary: binary)
+        for name in ["trojan", "hysteria2", "anytls"] {
+            let option = try XCTUnwrap(protocols.first { $0.kind == .inbound && $0.name == name })
+            XCTAssertTrue(option.isAutomatic)
+            let pair = try NewServerConfiguration.generate(
+                name: "TLS VPS", serverIPv4: "203.0.113.10", port: 443,
+                protocolName: name, handshakeHost: "", binary: binary,
+                tlsSource: .acme(domain: "example.com", email: "admin@example.com")
+            )
+            try NewServerConfiguration.validate(serverJSON: pair.serverConfigurationJSON,
+                                                outboundJSON: pair.clientOutboundJSON, binary: binary)
+            try NewServerConfiguration.validatePairing(serverJSON: pair.serverConfigurationJSON,
+                                                       outboundJSON: pair.clientOutboundJSON,
+                                                       serverIPv4: "203.0.113.10", port: 443, option: option)
+        }
+        let external = """
+        {"inbounds":[{"type":"trojan","tls":{"certificate_path":"/missing/cert.pem"}}]}
+        """
+        XCTAssertThrowsError(try NewServerConfiguration.validate(serverJSON: external,
+                                                                 outboundJSON: "{}", binary: binary)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Встроите сертификат"))
+        }
+    }
+
+    func testImportedPEMCertificateIsEmbeddedAndValidates() throws {
+        guard let binary = NewServerConfiguration.availableBinary() else { throw XCTSkip("sing-box unavailable") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-tls-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = directory.appendingPathComponent("key.pem")
+        let cert = directory.appendingPathComponent("cert.pem")
+        let openssl = Process()
+        openssl.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+        openssl.arguments = ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                             "-subj", "/CN=example.com", "-keyout", key.path, "-out", cert.path]
+        openssl.standardError = Pipe()
+        try openssl.run()
+        openssl.waitUntilExit()
+        XCTAssertEqual(openssl.terminationStatus, 0)
+        let pair = try NewServerConfiguration.generate(
+            name: "PEM VPS", serverIPv4: "203.0.113.10", port: 443,
+            protocolName: "trojan", handshakeHost: "", binary: binary,
+            tlsSource: .certificate(domain: "example.com",
+                                    certificatePEM: String(contentsOf: cert, encoding: .utf8),
+                                    keyPEM: String(contentsOf: key, encoding: .utf8)))
+        XCTAssertFalse(pair.serverConfigurationJSON.contains("certificate_path"))
+        XCTAssertTrue(pair.clientOutboundJSON.contains("BEGIN CERTIFICATE"))
+        try NewServerConfiguration.validate(serverJSON: pair.serverConfigurationJSON,
+                                            outboundJSON: pair.clientOutboundJSON, binary: binary)
+    }
+
     func testDeploymentScriptHasValidBashSyntax() throws {
         let script = ServerDeployment.deploymentScript(
             folder: "/tmp/ipinformer-new-example", version: "1.12.0",

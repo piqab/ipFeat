@@ -185,6 +185,10 @@ struct RoutingSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if !store.applicationActionMessage.isEmpty {
+                Text(store.applicationActionMessage).font(.caption).foregroundStyle(.secondary)
+            }
+
             if let addError {
                 Text(addError).font(.caption).foregroundStyle(.red)
             }
