@@ -2,8 +2,11 @@ import AppKit
 import SwiftUI
 
 struct MenuBarPopoverView: View {
+    private static let appsPerPage = 5
+
     @ObservedObject var store: RoutingStore
     @State private var widgetsVisible: Bool
+    @State private var pagesByRow: [String: Int] = [:]
     let checkNow: () -> Void
     let toggleWidgets: () -> Void
     let openSettings: () -> Void
@@ -97,43 +100,72 @@ struct MenuBarPopoverView: View {
     }
 
     private func applicationRow(_ row: AppRow) -> some View {
-        HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(row.applications) { application in
-                        Button {
-                            store.launch(application)
-                            close()
-                        } label: {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 30, height: 30)
-                                .frame(width: 36, height: 36)
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(application.enabled ? 1 : 0.4)
-                        .disabled(!application.enabled)
-                        .help(application.name)
-                        .accessibilityLabel(application.name)
-                    }
+        let pageCount = max(1, (row.applications.count + Self.appsPerPage - 1) / Self.appsPerPage)
+        let page = min(pagesByRow[row.id] ?? 0, pageCount - 1)
+        let visibleApplications = Array(row.applications.dropFirst(page * Self.appsPerPage).prefix(Self.appsPerPage))
+
+        return HStack(spacing: 4) {
+            if pageCount > 1 {
+                Button { pagesByRow[row.id] = page - 1 } label: {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 22, height: 36)
                 }
-                .padding(.horizontal, 8)
+                .buttonStyle(.plain)
+                .disabled(page == 0)
+                .help("Предыдущие программы: \(row.name)")
+                .accessibilityLabel("Предыдущие программы: \(row.name)")
             }
-            .frame(maxWidth: .infinity)
+
+            HStack(spacing: 8) {
+                ForEach(visibleApplications) { application in
+                    Button {
+                        store.launch(application)
+                        close()
+                    } label: {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 30, height: 30)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(application.enabled ? 1 : 0.4)
+                    .disabled(!application.enabled)
+                    .help(application.name)
+                    .accessibilityLabel(application.name)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if pageCount > 1 {
+                Button { pagesByRow[row.id] = page + 1 } label: {
+                    Image(systemName: "chevron.right")
+                        .frame(width: 22, height: 36)
+                }
+                .buttonStyle(.plain)
+                .disabled(page == pageCount - 1)
+                .help("Следующие программы: \(row.name)")
+                .accessibilityLabel("Следующие программы: \(row.name)")
+            }
 
             Button { addApplications(row.groupID) } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 30, height: 30)
-                    .background(row.color.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+                VStack(spacing: 0) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(height: 23)
+                    Text("\(row.applications.count)")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                }
+                .frame(width: 36, height: 36)
+                .background(row.color.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
             }
             .buttonStyle(.plain)
             .frame(width: 36, height: 36)
-            .padding(.trailing, 6)
             .help("Добавить программы: \(row.name)")
             .accessibilityLabel("Добавить программы: \(row.name)")
         }
+        .padding(.horizontal, 8)
         .frame(height: 42)
         .background(row.color.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
         .overlay(alignment: .leading) {
@@ -142,7 +174,7 @@ struct MenuBarPopoverView: View {
                 .frame(width: 4)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(row.name)
+        .accessibilityLabel("\(row.name), программ: \(row.applications.count)")
     }
 
     private func actionRow(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
