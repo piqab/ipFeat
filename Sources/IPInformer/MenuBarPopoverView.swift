@@ -2,11 +2,13 @@ import AppKit
 import SwiftUI
 
 struct MenuBarPopoverView: View {
-    private static let appsPerPage = 5
+    private static let iconWidth: CGFloat = 36
+    private static let iconSpacing: CGFloat = 8
+    private static let visibleIconWidth: CGFloat = 5 * iconWidth + 4 * iconSpacing
 
     @ObservedObject var store: RoutingStore
     @State private var widgetsVisible: Bool
-    @State private var pagesByRow: [String: Int] = [:]
+    @State private var scrollOffsetsByRow: [String: CGFloat] = [:]
     let checkNow: () -> Void
     let toggleWidgets: () -> Void
     let openSettings: () -> Void
@@ -100,50 +102,59 @@ struct MenuBarPopoverView: View {
     }
 
     private func applicationRow(_ row: AppRow) -> some View {
-        let pageCount = max(1, (row.applications.count + Self.appsPerPage - 1) / Self.appsPerPage)
-        let page = min(pagesByRow[row.id] ?? 0, pageCount - 1)
-        let visibleApplications = Array(row.applications.dropFirst(page * Self.appsPerPage).prefix(Self.appsPerPage))
+        let contentWidth = CGFloat(row.applications.count) * Self.iconWidth
+            + CGFloat(max(0, row.applications.count - 1)) * Self.iconSpacing
+        let maximumOffset = max(0, contentWidth - Self.visibleIconWidth)
+        let offset = min(scrollOffsetsByRow[row.id] ?? 0, maximumOffset)
 
         return HStack(spacing: 4) {
-            if pageCount > 1 {
-                Button { pagesByRow[row.id] = page - 1 } label: {
+            if maximumOffset > 0 {
+                Button { scrollOffsetsByRow[row.id] = max(0, offset - Self.visibleIconWidth) } label: {
                     Image(systemName: "chevron.left")
                         .frame(width: 22, height: 36)
                 }
                 .buttonStyle(.plain)
-                .disabled(page == 0)
+                .disabled(offset < 1)
                 .help("Предыдущие программы: \(row.name)")
                 .accessibilityLabel("Предыдущие программы: \(row.name)")
             }
 
-            HStack(spacing: 8) {
-                ForEach(visibleApplications) { application in
-                    Button {
-                        store.launch(application)
-                        close()
-                    } label: {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 30, height: 30)
-                            .frame(width: 36, height: 36)
+            HorizontalWheelScrollView(
+                contentWidth: contentWidth,
+                offset: Binding(
+                    get: { scrollOffsetsByRow[row.id] ?? 0 },
+                    set: { scrollOffsetsByRow[row.id] = $0 }
+                )
+            ) {
+                HStack(spacing: Self.iconSpacing) {
+                    ForEach(row.applications) { application in
+                        Button {
+                            store.launch(application)
+                            close()
+                        } label: {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 30, height: 30)
+                                .frame(width: Self.iconWidth, height: 36)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(application.enabled ? 1 : 0.4)
+                        .disabled(!application.enabled)
+                        .help(application.name)
+                        .accessibilityLabel(application.name)
                     }
-                    .buttonStyle(.plain)
-                    .opacity(application.enabled ? 1 : 0.4)
-                    .disabled(!application.enabled)
-                    .help(application.name)
-                    .accessibilityLabel(application.name)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 36, maxHeight: 36)
 
-            if pageCount > 1 {
-                Button { pagesByRow[row.id] = page + 1 } label: {
+            if maximumOffset > 0 {
+                Button { scrollOffsetsByRow[row.id] = min(maximumOffset, offset + Self.visibleIconWidth) } label: {
                     Image(systemName: "chevron.right")
                         .frame(width: 22, height: 36)
                 }
                 .buttonStyle(.plain)
-                .disabled(page == pageCount - 1)
+                .disabled(offset >= maximumOffset - 1)
                 .help("Следующие программы: \(row.name)")
                 .accessibilityLabel("Следующие программы: \(row.name)")
             }
