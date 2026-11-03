@@ -128,21 +128,11 @@ struct MenuBarPopoverView: View {
             ) {
                 HStack(spacing: Self.iconSpacing) {
                     ForEach(row.applications) { application in
-                        Button {
+                        ApplicationMenuIconButton(application: application) {
                             store.launch(application)
                             close()
-                        } label: {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 30, height: 30)
-                                .frame(width: Self.iconWidth, height: 36)
                         }
-                        .buttonStyle(.plain)
-                        .opacity(application.enabled ? 1 : 0.4)
-                        .disabled(!application.enabled)
-                        .help(application.name)
-                        .accessibilityLabel(application.name)
+                        .frame(width: Self.iconWidth, height: 36)
                     }
                 }
             }
