@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             checkNow: { [weak self] in self?.checkNow() },
             toggleWidgets: { [weak self] in self?.toggleWidget() },
             openSettings: { [weak self] in self?.openSettings() },
+            addApplications: { [weak self] groupID in self?.chooseApplications(toGroup: groupID) },
             quit: { NSApp.terminate(nil) },
             close: { [weak self] in self?.statusPopover.performClose(nil) }
         )
@@ -181,6 +182,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func openSettings() {
         showSettings(initialTab: 0)
+    }
+
+    private func chooseApplications(toGroup groupID: UUID?) {
+        statusPopover.performClose(nil)
+        let panel = NSOpenPanel()
+        panel.title = "Выберите программы"
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK else { return }
+        let errors = routingStore.addApplications(at: panel.urls, toGroup: groupID)
+        if !errors.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Не удалось добавить некоторые программы"
+            alert.informativeText = errors.joined(separator: "\n")
+            alert.runModal()
+        }
     }
 
     private func showSettings(initialTab: Int) {

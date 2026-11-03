@@ -7,24 +7,28 @@ struct MenuBarPopoverView: View {
     let checkNow: () -> Void
     let toggleWidgets: () -> Void
     let openSettings: () -> Void
+    let addApplications: (UUID?) -> Void
     let quit: () -> Void
     let close: () -> Void
 
     init(store: RoutingStore, widgetsVisible: Bool,
          checkNow: @escaping () -> Void, toggleWidgets: @escaping () -> Void,
-         openSettings: @escaping () -> Void, quit: @escaping () -> Void,
+         openSettings: @escaping () -> Void, addApplications: @escaping (UUID?) -> Void,
+         quit: @escaping () -> Void,
          close: @escaping () -> Void) {
         self.store = store
         _widgetsVisible = State(initialValue: widgetsVisible)
         self.checkNow = checkNow
         self.toggleWidgets = toggleWidgets
         self.openSettings = openSettings
+        self.addApplications = addApplications
         self.quit = quit
         self.close = close
     }
 
     private struct AppRow: Identifiable {
         let id: String
+        let groupID: UUID?
         let name: String
         let color: Color
         let applications: [RoutedApplication]
@@ -37,7 +41,7 @@ struct MenuBarPopoverView: View {
         var result = store.configuration.groups.compactMap { group -> AppRow? in
             let members = applications.filter { $0.groupID == group.id }
             guard !members.isEmpty else { return nil }
-            return AppRow(id: group.id.uuidString, name: group.name,
+            return AppRow(id: group.id.uuidString, groupID: group.id, name: group.name,
                           color: group.color.menuColor, applications: members)
         }
         let groupIDs = Set(store.configuration.groups.map(\.id))
@@ -46,7 +50,7 @@ struct MenuBarPopoverView: View {
             return !groupIDs.contains(groupID)
         }
         if !ungrouped.isEmpty {
-            result.append(AppRow(id: "ungrouped", name: "Без группы", color: .gray,
+            result.append(AppRow(id: "ungrouped", groupID: nil, name: "Без группы", color: .gray,
                                  applications: ungrouped))
         }
         return result
@@ -93,27 +97,42 @@ struct MenuBarPopoverView: View {
     }
 
     private func applicationRow(_ row: AppRow) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(row.applications) { application in
-                    Button {
-                        store.launch(application)
-                        close()
-                    } label: {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: 30, height: 30)
-                            .frame(width: 36, height: 36)
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(row.applications) { application in
+                        Button {
+                            store.launch(application)
+                            close()
+                        } label: {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: application.bundlePath))
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 30, height: 30)
+                                .frame(width: 36, height: 36)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(application.enabled ? 1 : 0.4)
+                        .disabled(!application.enabled)
+                        .help(application.name)
+                        .accessibilityLabel(application.name)
                     }
-                    .buttonStyle(.plain)
-                    .opacity(application.enabled ? 1 : 0.4)
-                    .disabled(!application.enabled)
-                    .help(application.name)
-                    .accessibilityLabel(application.name)
                 }
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+
+            Button { addApplications(row.groupID) } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(row.color.opacity(0.18), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .frame(width: 36, height: 36)
+            .padding(.trailing, 6)
+            .help("Добавить программы: \(row.name)")
+            .accessibilityLabel("Добавить программы: \(row.name)")
         }
         .frame(height: 42)
         .background(row.color.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
