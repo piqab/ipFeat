@@ -137,15 +137,20 @@ struct SingBoxSettingsView: View {
                 Button("Вернуть предыдущую") { Task { await engine.rollback() } }
                     .disabled(!engine.canRollback || engine.isInstalling)
             }
-            Text(engine.isPatched ? "Работает: sing-box 1.14.4 · патч IP Informer 1.14.4-1" :
+            Text(engine.isPatched ? "Работает: sing-box 1.14.4 · патч IP Informer 1.14.4-\(engine.activePatchRevision ?? 0)" :
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.isPatched ? "Патч IP Informer 1.14.4-1 активен · правила программ обновляются без обрыва соединений" :
-                        "Патч IP Informer 1.14.4-1 добавляет обновление правил и маршруты дочерних команд")
+                Text(engine.activePatchRevision == 1 ? "Доступно исправление наследования команд iTerm2 через системный login" :
+                        engine.isPatched ? "Патч IP Informer 1.14.4-2 активен · правила программ обновляются без обрыва соединений" :
+                        "Патч IP Informer 1.14.4-2 добавляет обновление правил и маршруты дочерних команд")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
+                    if engine.activePatchRevision == 1 {
+                        Button("Обновить патч") { Task { await engine.installPatch() } }
+                            .disabled(engine.isInstalling)
+                    }
                     Button("Вернуть официальный") { Task { await engine.removePatch() } }
                         .disabled(engine.isInstalling)
                 } else {

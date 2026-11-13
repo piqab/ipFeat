@@ -79,7 +79,7 @@ if [[ -x "$MANAGED_BINARY" ]]; then
     SING_BOX="$MANAGED_BINARY"
 fi
 LIVE_POLICY=""
-if [[ -n "$SING_BOX" ]] && "$SING_BOX" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-1'; then
+if [[ -n "$SING_BOX" ]] && "$SING_BOX" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-'; then
     CONFIG="$TARGET_HOME/Library/Application Support/IPInformer/sing-box-base.json"
     LIVE_POLICY="$TARGET_HOME/Library/Application Support/IPInformer/sing-box-policy.json"
     if [[ ! -f "$CONFIG" || ! -f "$LIVE_POLICY" ]]; then

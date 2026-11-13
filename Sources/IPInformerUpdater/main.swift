@@ -133,7 +133,7 @@ private enum Updater {
     private static func isPatchedEngineActive() -> Bool {
         guard FileManager.default.isExecutableFile(atPath: current.path),
               let output = try? execute(current.path, ["version"]) else { return false }
-        return output.contains("IPInformer patch: 1.14.4-1")
+        return output.contains("IPInformer patch: 1.14.4-")
     }
 
     private static func makeSession(config: URL) -> URLSession {

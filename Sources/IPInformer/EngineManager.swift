@@ -49,13 +49,18 @@ private struct EnginePolicyRecord: Codable {
 
 enum LocalSingBoxPatch {
     static let currentPath = "/Library/Application Support/IPInformer/engines/current"
-    private static let patchedPath = "/Library/Application Support/IPInformer/engines/1.14.4-ipinformer-1/sing-box"
+    private static let engineDirectory = "/Library/Application Support/IPInformer/engines"
 
-    static var isActive: Bool {
+    static var activeRevision: Int? {
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: currentPath)) != nil,
-              FileManager.default.isExecutableFile(atPath: currentPath) else { return false }
-        return URL(fileURLWithPath: currentPath).resolvingSymlinksInPath().path == patchedPath
+              FileManager.default.isExecutableFile(atPath: currentPath) else { return nil }
+        let target = URL(fileURLWithPath: currentPath).resolvingSymlinksInPath().path
+        if target == "\(engineDirectory)/1.14.4-ipinformer-2/sing-box" { return 2 }
+        if target == "\(engineDirectory)/1.14.4-ipinformer-1/sing-box" { return 1 }
+        return nil
     }
+
+    static var isActive: Bool { activeRevision != nil }
 }
 
 @MainActor
@@ -65,6 +70,7 @@ final class EngineManager: ObservableObject {
     @Published private(set) var activeVersion: String?
     @Published private(set) var installedVersion: String?
     @Published private(set) var isPatched = false
+    @Published private(set) var activePatchRevision: Int?
     @Published private(set) var lastError: String?
     @Published private(set) var message = ""
     @Published private(set) var isInstalling = false
@@ -105,7 +111,8 @@ final class EngineManager: ObservableObject {
 
     func refreshLocalState() {
         // SwiftUI may construct this object during a view update; keep process checks off the main thread.
-        isPatched = LocalSingBoxPatch.isActive
+        activePatchRevision = LocalSingBoxPatch.activeRevision
+        isPatched = activePatchRevision != nil
         if isPatched && autoInstall { autoInstall = false }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -260,7 +267,7 @@ final class EngineManager: ObservableObject {
     }
 
     func installPatch() async {
-        guard !isInstalling, !isPatched else { return }
+        guard !isInstalling, activePatchRevision != 2 else { return }
         autoInstall = false
         await switchPatch(mode: "--install")
     }
@@ -284,7 +291,7 @@ final class EngineManager: ObservableObject {
         }.value
         isInstalling = false
         refreshLocalState()
-        message = result.success ? (isPatched ? "Патч sing-box установлен" : "Официальный sing-box восстановлен")
+        message = result.success ? (mode == "--install" ? "Патч sing-box 1.14.4-2 установлен" : "Официальный sing-box восстановлен")
             : (result.output.isEmpty ? "Операция отменена или завершилась ошибкой" : result.output)
     }
 
