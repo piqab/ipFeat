@@ -78,7 +78,20 @@ fi
 if [[ -x "$MANAGED_BINARY" ]]; then
     SING_BOX="$MANAGED_BINARY"
 fi
-if [[ -z "$SING_BOX" ]] || ! "$SING_BOX" check -c "$CONFIG"; then
+LIVE_POLICY=""
+if [[ -n "$SING_BOX" ]] && "$SING_BOX" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-1'; then
+    CONFIG="$TARGET_HOME/Library/Application Support/IPInformer/sing-box-base.json"
+    LIVE_POLICY="$TARGET_HOME/Library/Application Support/IPInformer/sing-box-policy.json"
+    if [[ ! -f "$CONFIG" || ! -f "$LIVE_POLICY" ]]; then
+        echo "IP Informer live configuration is missing. Open IP Informer settings and retry."
+        exit 1
+    fi
+fi
+CHECK_ARGS=(-c "$CONFIG")
+if [[ -n "$LIVE_POLICY" ]]; then
+    CHECK_ARGS+=(--ipinformer-policy "$LIVE_POLICY")
+fi
+if [[ -z "$SING_BOX" ]] || ! "$SING_BOX" check "${CHECK_ARGS[@]}"; then
     echo "The selected sing-box version rejected the configuration."
     exit 1
 fi
@@ -110,6 +123,7 @@ PF_ANCHOR="/etc/pf.anchors/com.ipinformer"
 
 TEMP_PLIST=$(/usr/bin/mktemp)
 /usr/bin/sed -e "s|__SING_BOX__|$SING_BOX|g" -e "s|__CONFIG__|$CONFIG|g" \
+    -e "s|__LIVE_POLICY__|$LIVE_POLICY|g" \
     "$SERVICE_SOURCE/com.ipinformer.network.plist" > "$TEMP_PLIST"
 /usr/bin/plutil -lint "$TEMP_PLIST"
 /usr/bin/install -o root -g wheel -m 644 "$TEMP_PLIST" "$PLIST"

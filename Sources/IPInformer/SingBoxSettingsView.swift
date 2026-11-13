@@ -137,8 +137,22 @@ struct SingBoxSettingsView: View {
                 Button("Вернуть предыдущую") { Task { await engine.rollback() } }
                     .disabled(!engine.canRollback || engine.isInstalling)
             }
-            Text("Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
+            Text(engine.isPatched ? "Работает: sing-box 1.14.4 · патч IP Informer 1.14.4-1" :
+                    "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
+            HStack {
+                Text(engine.isPatched ? "Патч IP Informer 1.14.4-1 активен · правила программ обновляются без обрыва соединений" :
+                        "Патч IP Informer 1.14.4-1 добавляет обновление правил и маршруты дочерних команд")
+                    .font(.caption)
+                Spacer()
+                if engine.isPatched {
+                    Button("Вернуть официальный") { Task { await engine.removePatch() } }
+                        .disabled(engine.isInstalling)
+                } else {
+                    Button("Установить патч") { Task { await engine.installPatch() } }
+                        .disabled(engine.isInstalling)
+                }
+            }
             if engine.activeVersion == nil {
                 Text("При первой установке выберите выпуск. macOS запросит пароль администратора для системной службы.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -157,7 +171,7 @@ struct SingBoxSettingsView: View {
                 Button(engine.activeVersion == nil ? "Установить" : "Переключить") {
                     Task { await engine.installSelected() }
                 }
-                .disabled(engine.isInstalling || !engine.selectableReleases.contains(where: { $0.version == engine.selectedVersion }))
+                .disabled(engine.isInstalling || engine.isPatched || !engine.selectableReleases.contains(where: { $0.version == engine.selectedVersion }))
                 Button("Проверить") { Task { await engine.checkSelected() } }
                     .disabled(engine.isInstalling || engine.selectedRelease == nil)
             }
@@ -172,6 +186,7 @@ struct SingBoxSettingsView: View {
             }
             Toggle("Автоматически устанавливать новые стабильные версии", isOn: $engine.autoInstall)
                 .toggleStyle(.checkbox)
+                .disabled(engine.isPatched)
             Text("При несовместимой конфигурации текущая версия продолжит работать. Проверка выполняется в течение 5 минут после включения, затем раз в сутки.")
                 .font(.caption).foregroundStyle(.secondary)
             if engine.isInstalling { ProgressView("Проверка и установка…") }

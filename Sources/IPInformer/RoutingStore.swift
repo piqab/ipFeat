@@ -625,7 +625,28 @@ final class RoutingStore: ObservableObject {
     func removeApplication(_ application: RoutedApplication) {
         guard application.bundleIdentifier != Self.selfBundleIdentifier else { return }
         configuration.applications.removeAll { $0.id == application.id }
+        configuration.childCommandChoices.removeAll { $0.applicationID == application.id }
         configuration.redirects.removeAll { $0.applicationID == application.id }
+        persistAndRegenerate()
+    }
+
+    func saveChildCommandChoice(applicationID: UUID, executablePath: String, route: DefaultRoute) {
+        guard configuration.applications.contains(where: { $0.id == applicationID && $0.askChildCommands }) else { return }
+        let path = URL(fileURLWithPath: executablePath).standardizedFileURL.path
+        guard path.hasPrefix("/"), !path.contains("\n") else { return }
+        if let index = configuration.childCommandChoices.firstIndex(where: {
+            $0.applicationID == applicationID && $0.executablePath == path
+        }) {
+            configuration.childCommandChoices[index].route = route
+        } else {
+            configuration.childCommandChoices.append(ChildCommandChoice(applicationID: applicationID,
+                                                                        executablePath: path, route: route))
+        }
+        persistAndRegenerate()
+    }
+
+    func removeChildCommandChoice(_ choice: ChildCommandChoice) {
+        configuration.childCommandChoices.removeAll { $0.id == choice.id }
         persistAndRegenerate()
     }
 
@@ -798,7 +819,13 @@ final class RoutingStore: ObservableObject {
     private func regenerateConfiguration() {
         do {
             let data = try SingBoxConfigurationGenerator.data(for: configuration, localNetworks: connectedIPv4Networks)
+            let live = try SingBoxConfigurationGenerator.liveConfiguration(for: configuration,
+                                                                            localNetworks: connectedIPv4Networks)
             if singBoxBinaryPath() != nil { try validateWithSingBox(data) }
+            if isPatchedSingBox { try validateWithSingBox(live.base, policy: live.policy) }
+            let directory = try applicationSupportDirectory()
+            try writeIfChanged(live.policy, to: directory.appendingPathComponent("sing-box-policy.json"))
+            try writeIfChanged(live.base, to: directory.appendingPathComponent("sing-box-base.json"))
             try writeGeneratedConfiguration(data)
             validationMessage = singBoxBinaryPath() == nil
                 ? "Конфигурация создана · установите sing-box для проверки"
@@ -813,11 +840,30 @@ final class RoutingStore: ObservableObject {
     private func writeGeneratedConfiguration(_ data: Data) throws {
         let directory = try applicationSupportDirectory()
         let url = directory.appendingPathComponent("sing-box.json")
-        try data.write(to: url, options: .atomic)
+        try writeIfChanged(data, to: url)
         generatedConfigPath = url.path
     }
 
-    private func validateWithSingBox(_ data: Data) throws {
+    private func writeIfChanged(_ data: Data, to url: URL) throws {
+        if (try? Data(contentsOf: url)) == data { return }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private var isPatchedSingBox: Bool {
+        guard let binary = singBoxBinaryPath() else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["version"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return output.contains("IPInformer patch: 1.14.4-1")
+    }
+
+    private func validateWithSingBox(_ data: Data, policy: Data? = nil) throws {
         guard let binary = singBoxBinaryPath() else {
             throw RoutingConfigurationError.invalidMainConfiguration("sing-box не найден; установите brew install sing-box")
         }
@@ -826,9 +872,16 @@ final class RoutingStore: ObservableObject {
         try data.write(to: candidate, options: .atomic)
         defer { try? FileManager.default.removeItem(at: candidate) }
 
+        let policyCandidate = directory.appendingPathComponent("sing-box-policy.candidate.json")
+        if let policy {
+            try policy.write(to: policyCandidate, options: .atomic)
+        }
+        defer { if policy != nil { try? FileManager.default.removeItem(at: policyCandidate) } }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["check", "-c", candidate.path]
+            + (policy == nil ? [] : ["--ipinformer-policy", policyCandidate.path])
         let pipe = Pipe()
         process.standardError = pipe
         process.standardOutput = pipe

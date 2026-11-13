@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let monitor = IPMonitor()
     let routingStore = RoutingStore()
+    private lazy var childRoutePromptServer = ChildRoutePromptServer(store: routingStore)
 
     private var panelsByScreen: [String: NSPanel] = [:]
     private var statusItem: NSStatusItem?
@@ -36,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         routingStore.startRouteMonitoring { [weak monitor = monitor] in
             monitor?.sources ?? []
         }
+        childRoutePromptServer.start()
         let hasEngine = [
             "/Library/Application Support/IPInformer/engines/current",
             "/opt/homebrew/bin/sing-box", "/usr/local/bin/sing-box"
@@ -47,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.removeObserver(self)
         monitor.stop()
         routingStore.stopRouteMonitoring()
+        childRoutePromptServer.stop()
     }
 
     private func makePanel(for screen: NSScreen, identifier: String) -> NSPanel {

@@ -8,13 +8,25 @@
 		<data>
 		xVM3fy/HH2jMwKcX3JCVPWjs3XA=
 		</data>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-1</key>
+		<data>
+		bNj8+hXsHuGTSu06KA5+3jP3nQ0=
+		</data>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-1.sha256</key>
+		<data>
+		mfBkVYFP9hf3tNqNEP7nPwfJO7A=
+		</data>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<data>
-		yNUiezX17l68u6asiN72yB0TURw=
+		52ciJzXxY5aHTm/z9OUBFChh81M=
+		</data>
+		<key>Resources/scripts/install-patched-engine.sh</key>
+		<data>
+		sVe6amusCCUG6cPFyZDB+Cljj3Q=
 		</data>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>
 		<data>
-		zkJuUtDM8my8lnGpdi5gvh5sT0M=
+		OHR305kwI97Yi2SWoYx83DHSsF4=
 		</data>
 		<key>Resources/scripts/service/com.ipinformer.pf</key>
 		<data>
@@ -30,7 +42,7 @@
 		</data>
 		<key>Resources/scripts/service/ipinformer-supervisor.sh</key>
 		<data>
-		Wd8piqpMMxmbBXiplwAbVTI8rUw=
+		bmDTCZcbalQXgiykSXw4vxFZEbA=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -39,10 +51,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			MzMsdAxzXusDB3tummk8DiBQosE=
+			pghKKQ6YYppVG8BB0N2EeA5UvIc=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"33332c740c735eeb03077b6e9a693c0e2050a2c1"</string>
+			<string>cdhash H"a6084a290e98629a551bc041d0dd84780e54bc87"</string>
 		</dict>
 		<key>Resources/AppIcon.icns</key>
 		<dict>
@@ -51,18 +63,39 @@
 			/cakepdozAZEwB4kgFxYIWzpP2G+cyLt0VEO3j1D6VU=
 			</data>
 		</dict>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-1</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			D/oV/nSSmBu2Vq+bqZExPPkitEyIlYk3BP3caYEFE+U=
+			</data>
+		</dict>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-1.sha256</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			Z9Y+pggJzzEKhpIMdXl3rjHFsXrcgg+PL+WQulQQ9KM=
+			</data>
+		</dict>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			o7qReXdfEc6JGLm37RXn8hG53N0OoZUsZwkut2Wp30I=
+			tpozMYpjH06TLv+rnHl7CSaB8k/vJGDfne6NQafwK+A=
+			</data>
+		</dict>
+		<key>Resources/scripts/install-patched-engine.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			n8knoP+E35kt6w9+bisvQs0W9vl3/iAQAIaoyRurh/o=
 			</data>
 		</dict>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			NR1ShhewuCFzHM2YIr1O8QH7UWvr9dJsCc6xs0mN1to=
+			0tLahdimI7JzZ0tCMn7I5VvynUy2GFjvq9vQliDwX5g=
 			</data>
 		</dict>
 		<key>Resources/scripts/service/com.ipinformer.pf</key>
@@ -90,7 +123,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			1BZnpxvIqMdXM7DiPpMzJo7oC2EaDM35Ah7Cf9zYBu8=
+			NxCtQvhG3F9kREUHcExKFas04BSdtH36hHyI920dVNY=
 			</data>
 		</dict>
 	</dict>

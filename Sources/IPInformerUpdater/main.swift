@@ -71,6 +71,12 @@ private enum Updater {
         guard mode == "--dry-run-version" || getuid() == 0 else {
             throw UpdateError.message("Updater must run as root")
         }
+        if isPatchedEngineActive() {
+            if mode == "--auto-policy" { return }
+            if mode == "--install-version" || mode == "--rollback" {
+                throw UpdateError.message("IP Informer patch is active. Remove the patch in IP Informer before switching official sing-box versions.")
+            }
+        }
         if mode == "--rollback" { try await rollback(config: config); return }
         let auto = mode == "--auto-policy"
         if auto {
@@ -122,6 +128,12 @@ private enum Updater {
             }
             throw error
         }
+    }
+
+    private static func isPatchedEngineActive() -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: current.path),
+              let output = try? execute(current.path, ["version"]) else { return false }
+        return output.contains("IPInformer patch: 1.14.4-1")
     }
 
     private static func makeSession(config: URL) -> URLSession {

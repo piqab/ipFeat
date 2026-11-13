@@ -463,6 +463,36 @@ struct RoutingSettingsView: View {
                 .controlSize(.small)
                 .help("Для этой программы локальные IPv4 идут через сеть Mac при любом выбранном маршруте. Публичные адреса следуют маршруту программы или группы.")
 
+            if application.bundleIdentifier != RoutingStore.selfBundleIdentifier {
+                Toggle("Спрашивать маршрут для дочерних команд", isOn: applicationBinding(application, \.askChildCommands))
+                    .controlSize(.small)
+                if application.askChildCommands {
+                    Text("Команды по умолчанию наследуют маршрут программы. При первом внешнем IPv4-соединении неизвестной команды IP Informer предложит выбрать маршрут и запомнит его.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(store.configuration.childCommandChoices.filter { $0.applicationID == application.id }) { choice in
+                        HStack {
+                            Text(URL(fileURLWithPath: choice.executablePath).lastPathComponent)
+                                .font(.caption.monospaced())
+                            Picker("Маршрут", selection: Binding(
+                                get: { store.configuration.childCommandChoices.first(where: { $0.id == choice.id })?.route ?? choice.route },
+                                set: { store.saveChildCommandChoice(applicationID: application.id,
+                                                                     executablePath: choice.executablePath, route: $0) }
+                            )) {
+                                ForEach(store.outboundTags, id: \.self) { tag in
+                                    Text(tag).tag(DefaultRoute.outbound(tag))
+                                }
+                                Text("Только этот Mac").tag(DefaultRoute.localOnly)
+                                Text("Без сети").tag(DefaultRoute.block)
+                            }
+                            Button(role: .destructive) { store.removeChildCommandChoice(choice) } label: {
+                                Image(systemName: "trash")
+                            }.buttonStyle(.borderless)
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+
             HStack(spacing: 6) {
                 Text(application.enabled ? "Внешний IP маршрута:" : "Внешний IP маршрута (программа выключена):")
                     .foregroundStyle(.secondary)

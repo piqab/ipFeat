@@ -53,6 +53,7 @@ final class EngineManager: ObservableObject {
     @Published private(set) var history: [EngineHistoryRecord] = []
     @Published private(set) var activeVersion: String?
     @Published private(set) var installedVersion: String?
+    @Published private(set) var isPatched = false
     @Published private(set) var lastError: String?
     @Published private(set) var message = ""
     @Published private(set) var isInstalling = false
@@ -73,7 +74,7 @@ final class EngineManager: ObservableObject {
     }
 
     var canRollback: Bool {
-        history.first?.previousVersion != nil && history.first?.previousSnapshotName != nil
+        !isPatched && history.first?.previousVersion != nil && history.first?.previousSnapshotName != nil
     }
 
     var selectedRelease: EngineRelease? {
@@ -90,6 +91,8 @@ final class EngineManager: ObservableObject {
     }
 
     func refreshLocalState() {
+        isPatched = Self.hasIPInformerPatch(at: systemURL.appendingPathComponent("engines/current").path)
+        if isPatched && autoInstall { autoInstall = false }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let data = try? Data(contentsOf: systemURL.appendingPathComponent("engine-status.json")),
@@ -154,6 +157,7 @@ final class EngineManager: ObservableObject {
 
     func installSelected() async {
         guard !selectedVersion.isEmpty, !isInstalling else { return }
+        guard !isPatched else { message = "Сначала удалите патч IP Informer"; return }
         guard releases.contains(where: { $0.version == selectedVersion }) else {
             message = "Выберите выпуск из списка"
             return
@@ -229,6 +233,49 @@ final class EngineManager: ObservableObject {
         isInstalling = false
         refreshLocalState()
         message = result.success ? "Предыдущая версия восстановлена" : result.output
+    }
+
+    func installPatch() async {
+        guard !isInstalling, !isPatched else { return }
+        autoInstall = false
+        await switchPatch(mode: "--install")
+    }
+
+    func removePatch() async {
+        guard !isInstalling, isPatched else { return }
+        await switchPatch(mode: "--remove")
+    }
+
+    private func switchPatch(mode: String) async {
+        guard let script = Bundle.main.resourceURL?.appendingPathComponent("scripts/install-patched-engine.sh"),
+              FileManager.default.isExecutableFile(atPath: script.path) else {
+            message = "Установщик патча не включён в приложение"
+            return
+        }
+        isInstalling = true
+        message = mode == "--install" ? "Установка патча sing-box…" : "Возврат официального sing-box…"
+        let path = script.path
+        let result = await Task.detached(priority: .userInitiated) {
+            Self.runPrivileged(command: "/bin/zsh \(Self.shellQuote(path)) \(mode)")
+        }.value
+        isInstalling = false
+        refreshLocalState()
+        message = result.success ? (isPatched ? "Патч sing-box установлен" : "Официальный sing-box восстановлен")
+            : (result.output.isEmpty ? "Операция отменена или завершилась ошибкой" : result.output)
+    }
+
+    private nonisolated static func hasIPInformerPatch(at path: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: path) else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["version"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return false }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        process.waitUntilExit()
+        return output.contains("IPInformer patch: 1.14.4-1")
     }
 
     private nonisolated static func runPrivilegedInstaller(scriptPath: String, version: String) -> (success: Bool, output: String) {

@@ -3,6 +3,7 @@ set -u
 
 SING_BOX="${1:-/opt/homebrew/bin/sing-box}"
 CONFIG="${2:-}"
+LIVE_POLICY="${3:-}"
 LOG_TAG="IPInformerNetwork"
 CHILD_PID=""
 
@@ -30,7 +31,11 @@ while true; do
         /bin/sleep 3
         continue
     fi
-    if ! "$SING_BOX" check -c "$CONFIG" >/dev/null 2>&1; then
+    ARGS=(-c "$CONFIG")
+    if [[ -n "$LIVE_POLICY" ]]; then
+        ARGS+=(--ipinformer-policy "$LIVE_POLICY")
+    fi
+    if ! "$SING_BOX" check "${ARGS[@]}" >/dev/null 2>&1; then
         log_message "configuration check failed; kill switch remains active"
         /bin/sleep 3
         continue
@@ -38,7 +43,7 @@ while true; do
 
     LAST_HASH=$(/usr/bin/shasum -a 256 "$CONFIG" | /usr/bin/awk '{print $1}')
     log_message "starting sing-box"
-    "$SING_BOX" run -c "$CONFIG" &
+    "$SING_BOX" run "${ARGS[@]}" &
     CHILD_PID=$!
 
     while /bin/kill -0 "$CHILD_PID" 2>/dev/null; do
@@ -46,7 +51,7 @@ while true; do
         [[ -f "$CONFIG" ]] || continue
         CURRENT_HASH=$(/usr/bin/shasum -a 256 "$CONFIG" | /usr/bin/awk '{print $1}')
         if [[ "$CURRENT_HASH" != "$LAST_HASH" ]]; then
-            if "$SING_BOX" check -c "$CONFIG" >/dev/null 2>&1; then
+            if "$SING_BOX" check "${ARGS[@]}" >/dev/null 2>&1; then
                 log_message "reloading checked configuration"
                 /bin/kill -HUP "$CHILD_PID" 2>/dev/null || true
                 LAST_HASH="$CURRENT_HASH"

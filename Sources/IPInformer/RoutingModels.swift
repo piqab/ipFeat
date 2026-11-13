@@ -110,15 +110,16 @@ struct RoutedApplication: Identifiable, Codable, Equatable, Sendable {
     var enabled: Bool
     var launchAfterEngineReady: Bool
     var allowLocalNetwork = false
+    var askChildCommands = false
 
     private enum CodingKeys: String, CodingKey {
         case id, name, bundlePath, executablePath, bundleIdentifier, groupID, profileID
-        case enabled, launchAfterEngineReady, allowLocalNetwork
+        case enabled, launchAfterEngineReady, allowLocalNetwork, askChildCommands
     }
 
     init(id: UUID, name: String, bundlePath: String, executablePath: String,
          bundleIdentifier: String?, groupID: UUID?, profileID: UUID?, enabled: Bool,
-         launchAfterEngineReady: Bool, allowLocalNetwork: Bool = false) {
+         launchAfterEngineReady: Bool, allowLocalNetwork: Bool = false, askChildCommands: Bool = false) {
         self.id = id
         self.name = name
         self.bundlePath = bundlePath
@@ -129,6 +130,7 @@ struct RoutedApplication: Identifiable, Codable, Equatable, Sendable {
         self.enabled = enabled
         self.launchAfterEngineReady = launchAfterEngineReady
         self.allowLocalNetwork = allowLocalNetwork
+        self.askChildCommands = askChildCommands
     }
 
     init(from decoder: Decoder) throws {
@@ -143,7 +145,15 @@ struct RoutedApplication: Identifiable, Codable, Equatable, Sendable {
         enabled = try values.decode(Bool.self, forKey: .enabled)
         launchAfterEngineReady = try values.decodeIfPresent(Bool.self, forKey: .launchAfterEngineReady) ?? false
         allowLocalNetwork = try values.decodeIfPresent(Bool.self, forKey: .allowLocalNetwork) ?? false
+        askChildCommands = try values.decodeIfPresent(Bool.self, forKey: .askChildCommands) ?? false
     }
+}
+
+struct ChildCommandChoice: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var applicationID: UUID
+    var executablePath: String
+    var route: DefaultRoute
 }
 
 struct RoutedCommand: Identifiable, Codable, Equatable, Sendable {
@@ -180,6 +190,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
     var groups: [RoutingGroup] = []
     var applications: [RoutedApplication] = []
     var commands: [RoutedCommand] = []
+    var childCommandChoices: [ChildCommandChoice] = []
     var singBoxAlwaysOn = true
     var serviceStartsAtBoot = true
     var globalStartupKillSwitch = true
@@ -191,7 +202,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
     var clientConnections: [ClientConnection] = []
 
     private enum CodingKeys: String, CodingKey {
-        case profiles, groups, applications, commands, singBoxAlwaysOn, serviceStartsAtBoot
+        case profiles, groups, applications, commands, childCommandChoices, singBoxAlwaysOn, serviceStartsAtBoot
         case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProxyEnabled, selfProxySeeded, redirects, clientConnections
     }
 
@@ -227,6 +238,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         groups = try values.decodeIfPresent([RoutingGroup].self, forKey: .groups) ?? []
         applications = try values.decodeIfPresent([RoutedApplication].self, forKey: .applications) ?? []
         commands = try values.decodeIfPresent([RoutedCommand].self, forKey: .commands) ?? []
+        childCommandChoices = try values.decodeIfPresent([ChildCommandChoice].self, forKey: .childCommandChoices) ?? []
         singBoxAlwaysOn = try values.decodeIfPresent(Bool.self, forKey: .singBoxAlwaysOn) ?? true
         serviceStartsAtBoot = try values.decodeIfPresent(Bool.self, forKey: .serviceStartsAtBoot) ?? true
         globalStartupKillSwitch = try values.decodeIfPresent(Bool.self, forKey: .globalStartupKillSwitch) ?? true

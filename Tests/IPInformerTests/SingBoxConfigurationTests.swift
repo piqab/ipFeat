@@ -3,6 +3,66 @@ import XCTest
 @testable import IPInformer
 
 final class SingBoxConfigurationTests: XCTestCase {
+    func testLivePolicyChangesWithoutChangingBaseConfiguration() throws {
+        let profile = RoutingProfile(name: "Proxy", outboundTag: "proxy-de")
+        var app = application(name: "iTerm", profileID: profile.id)
+        app.askChildCommands = true
+        let before = RoutingConfiguration(profiles: [profile], mainConfigurationJSON: mainConfiguration)
+        var after = before
+        after.applications = [app]
+        after.childCommandChoices = [ChildCommandChoice(applicationID: app.id,
+                                                        executablePath: "/usr/bin/ssh",
+                                                        route: .outbound("proxy-us"))]
+        let original = try SingBoxConfigurationGenerator.liveConfiguration(for: before)
+        let changed = try SingBoxConfigurationGenerator.liveConfiguration(for: after)
+        XCTAssertEqual(original.base, changed.base, "Application edits must not restart the TUN")
+        XCTAssertNotEqual(original.policy, changed.policy)
+        let policy = try XCTUnwrap(JSONSerialization.jsonObject(with: changed.policy) as? [String: Any])
+        let rules = try XCTUnwrap(policy["rules"] as? [[String: Any]])
+        XCTAssertTrue(rules.contains { ($0["process_path"] as? [String]) == ["/usr/bin/ssh"]
+            && $0["ancestor_process_path_regex"] != nil && ($0["outbound"] as? String) == "proxy-us" })
+        XCTAssertTrue(rules.contains { rule in
+            guard let branches = rule["rules"] as? [[String: Any]] else { return false }
+            return branches.contains { $0["ancestor_process_path_regex"] != nil }
+        })
+        let prompts = try XCTUnwrap(policy["prompts"] as? [[String: Any]])
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertEqual(prompts[0]["exclude_process_paths"] as? [String], ["/usr/bin/ssh"])
+
+        if let binary = ProcessInfo.processInfo.environment["IPINFORMER_PATCHED_SING_BOX"] {
+            let baseURL = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-live-\(UUID()).json")
+            let policyURL = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-policy-\(UUID()).json")
+            defer {
+                try? FileManager.default.removeItem(at: baseURL)
+                try? FileManager.default.removeItem(at: policyURL)
+            }
+            try changed.base.write(to: baseURL)
+            try changed.policy.write(to: policyURL)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: binary)
+            process.arguments = ["check", "-c", baseURL.path, "--ipinformer-policy", policyURL.path]
+            let output = Pipe()
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0,
+                           String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        }
+    }
+
+    func testExplicitGlobalCommandSkipsChildPrompt() throws {
+        let profile = RoutingProfile(name: "Proxy", outboundTag: "proxy-us")
+        var app = application(name: "iTerm", profileID: profile.id)
+        app.askChildCommands = true
+        let command = RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh", profileID: profile.id)
+        let config = RoutingConfiguration(profiles: [profile], applications: [app], commands: [command],
+                                          mainConfigurationJSON: mainConfiguration)
+        let live = try SingBoxConfigurationGenerator.liveConfiguration(for: config)
+        let policy = try XCTUnwrap(JSONSerialization.jsonObject(with: live.policy) as? [String: Any])
+        let prompts = try XCTUnwrap(policy["prompts"] as? [[String: Any]])
+        XCTAssertTrue((prompts[0]["exclude_process_paths"] as? [String])?.contains("/usr/bin/ssh") == true)
+    }
+
     func testCommandRoutesLocalIPv4BeforeSelectedProxyAndPersists() throws {
         let profile = RoutingProfile(name: "Proxy", outboundTag: "proxy-us")
         let command = RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh", profileID: profile.id)
@@ -166,14 +226,14 @@ final class SingBoxConfigurationTests: XCTestCase {
         let root = try root(for: configuration)
         let route = try XCTUnwrap(root["route"] as? [String: Any])
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
-        XCTAssertEqual(rules.count, 7)
+        XCTAssertEqual(rules.count, 9)
         XCTAssertEqual(rules[2]["inbound"] as? [String], [SingBoxConfigurationGenerator.updaterInboundTag])
-        XCTAssertEqual(rules[3]["outbound"] as? String, "proxy-de")
-        XCTAssertNotNil(rules[3]["inbound"])
-        XCTAssertNotNil(rules[4]["process_path_regex"])
-        XCTAssertEqual(rules[5]["inbound"] as? [String], [SingBoxConfigurationGenerator.managedInboundTag])
-        XCTAssertEqual(rules[5]["outbound"] as? String, "direct")
-        XCTAssertEqual(rules[6]["outbound"] as? String, "direct")
+        XCTAssertEqual(rules[4]["outbound"] as? String, "proxy-de")
+        XCTAssertEqual(rules[4]["inbound"] as? [String], ["ipinformer-probe-1"])
+        XCTAssertNotNil(rules[6]["process_path_regex"])
+        XCTAssertEqual(rules[7]["inbound"] as? [String], [SingBoxConfigurationGenerator.managedInboundTag])
+        XCTAssertEqual(rules[7]["outbound"] as? String, "direct")
+        XCTAssertEqual(rules[8]["outbound"] as? String, "direct")
     }
 
     func testSelectedDefaultRouteCoversUnassignedAppsBeforeImportedRules() throws {
@@ -370,7 +430,7 @@ final class SingBoxConfigurationTests: XCTestCase {
                        String(decoding: webKitOutput.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
     }
 
-    func testOneProbeEndpointPerUsedOutbound() throws {
+    func testProbePortsStayStableWhenApplicationsChange() throws {
         let profile = RoutingProfile(name: "Shared", outboundTag: "proxy-de")
         let configuration = RoutingConfiguration(
             profiles: [profile],
@@ -382,14 +442,14 @@ final class SingBoxConfigurationTests: XCTestCase {
         )
         let endpoints = SingBoxConfigurationGenerator.probeEndpoints(for: configuration)
         XCTAssertEqual(endpoints, [
-            RouteProbeEndpoint(outboundTag: "proxy-de", inboundTag: "ipinformer-probe-0", port: 39_000)
+            RouteProbeEndpoint(outboundTag: "proxy-de", inboundTag: "ipinformer-probe-1", port: 39_001)
         ])
         let generated = try root(for: configuration)
         let inbounds = try XCTUnwrap(generated["inbounds"] as? [[String: Any]])
         let probes = inbounds.filter { ($0["tag"] as? String)?.hasPrefix("ipinformer-probe-") == true }
-        XCTAssertEqual(probes.count, 1)
-        XCTAssertEqual(probes.first?["type"] as? String, "socks")
-        XCTAssertEqual(probes.first?["listen_port"] as? Int, 39_000)
+        XCTAssertEqual(probes.count, 3)
+        XCTAssertTrue(probes.contains { ($0["tag"] as? String) == "ipinformer-probe-1" &&
+            ($0["listen_port"] as? Int) == 39_001 && ($0["type"] as? String) == "socks" })
     }
 
     func testDisabledApplicationStillHasProbeForItsGroupProfile() throws {
@@ -405,7 +465,7 @@ final class SingBoxConfigurationTests: XCTestCase {
         XCTAssertEqual(SingBoxConfigurationGenerator.probeEndpoints(for: configuration).map(\.outboundTag), ["proxy-de"])
         let generated = try root(for: configuration)
         let inbounds = try XCTUnwrap(generated["inbounds"] as? [[String: Any]])
-        XCTAssertTrue(inbounds.contains { ($0["tag"] as? String) == "ipinformer-probe-0" })
+        XCTAssertTrue(inbounds.contains { ($0["tag"] as? String) == "ipinformer-probe-1" })
         let route = try XCTUnwrap(generated["route"] as? [String: Any])
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
         XCTAssertFalse(rules.contains { matches(app.executablePath, rule: $0) })
