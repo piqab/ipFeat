@@ -850,17 +850,7 @@ final class RoutingStore: ObservableObject {
     }
 
     private var isPatchedSingBox: Bool {
-        guard let binary = singBoxBinaryPath() else { return false }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["version"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return output.contains("IPInformer patch: 1.14.4-1")
+        LocalSingBoxPatch.isActive && singBoxBinaryPath() == LocalSingBoxPatch.currentPath
     }
 
     private func validateWithSingBox(_ data: Data, policy: Data? = nil) throws {

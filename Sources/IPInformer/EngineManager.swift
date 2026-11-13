@@ -47,6 +47,17 @@ private struct EnginePolicyRecord: Codable {
     var requestedAt: Date
 }
 
+enum LocalSingBoxPatch {
+    static let currentPath = "/Library/Application Support/IPInformer/engines/current"
+    private static let patchedPath = "/Library/Application Support/IPInformer/engines/1.14.4-ipinformer-1/sing-box"
+
+    static var isActive: Bool {
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: currentPath)) != nil,
+              FileManager.default.isExecutableFile(atPath: currentPath) else { return false }
+        return URL(fileURLWithPath: currentPath).resolvingSymlinksInPath().path == patchedPath
+    }
+}
+
 @MainActor
 final class EngineManager: ObservableObject {
     @Published private(set) var releases: [EngineRelease] = []
@@ -57,6 +68,8 @@ final class EngineManager: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var message = ""
     @Published private(set) var isInstalling = false
+    private var homebrewVersionCache: String?
+    private var startedHomebrewVersionLookup = false
     @Published private(set) var preflightOutput = ""
     @Published private(set) var checkedVersion: String?
     @Published var selectedVersion = ""
@@ -91,7 +104,8 @@ final class EngineManager: ObservableObject {
     }
 
     func refreshLocalState() {
-        isPatched = Self.hasIPInformerPatch(at: systemURL.appendingPathComponent("engines/current").path)
+        // SwiftUI may construct this object during a view update; keep process checks off the main thread.
+        isPatched = LocalSingBoxPatch.isActive
         if isPatched && autoInstall { autoInstall = false }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -104,8 +118,18 @@ final class EngineManager: ObservableObject {
            let records = try? decoder.decode([EngineHistoryRecord].self, from: data) {
             history = records
         }
-        installedVersion = activeVersion ?? homebrewVersion()
+        installedVersion = activeVersion ?? homebrewVersionCache
         if selectedVersion.isEmpty { selectedVersion = installedVersion ?? "" }
+        if activeVersion == nil && !startedHomebrewVersionLookup {
+            startedHomebrewVersionLookup = true
+            Task { [weak self] in
+                let version = await Task.detached(priority: .utility) { Self.homebrewVersion() }.value
+                guard let self else { return }
+                self.homebrewVersionCache = version
+                self.installedVersion = self.activeVersion ?? version
+                if self.selectedVersion.isEmpty { self.selectedVersion = self.installedVersion ?? "" }
+            }
+        }
     }
 
     func refreshReleases() async {
@@ -264,20 +288,6 @@ final class EngineManager: ObservableObject {
             : (result.output.isEmpty ? "Операция отменена или завершилась ошибкой" : result.output)
     }
 
-    private nonisolated static func hasIPInformerPatch(at path: String) -> Bool {
-        guard FileManager.default.isExecutableFile(atPath: path) else { return false }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["version"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        guard (try? process.run()) != nil else { return false }
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        process.waitUntilExit()
-        return output.contains("IPInformer patch: 1.14.4-1")
-    }
-
     private nonisolated static func runPrivilegedInstaller(scriptPath: String, version: String) -> (success: Bool, output: String) {
         guard version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$"#, options: .regularExpression) != nil else {
             return (false, "Некорректный номер версии")
@@ -323,7 +333,7 @@ final class EngineManager: ObservableObject {
         }
     }
 
-    private func homebrewVersion() -> String? {
+    private nonisolated static func homebrewVersion() -> String? {
         guard let path = ["/opt/homebrew/bin/sing-box", "/usr/local/bin/sing-box"]
             .first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
         let process = Process()
