@@ -38,7 +38,7 @@ if [[ "$1" == "--install" ]]; then
     "$BUNDLED" check -c "$USER_CONFIG/sing-box-base.json" \
         --ipinformer-policy "$USER_CONFIG/sing-box-policy.json"
     if [[ -L "$CURRENT" ]]; then
-        PREVIOUS=$(/bin/readlink "$CURRENT")
+        PREVIOUS=$(/usr/bin/readlink "$CURRENT")
     elif [[ -x "$CURRENT" ]]; then
         /usr/bin/install -d -m 755 "$ENGINES/ipinformer-before-patch"
         /usr/bin/install -o root -g wheel -m 755 "$CURRENT" "$ENGINES/ipinformer-before-patch/sing-box"
