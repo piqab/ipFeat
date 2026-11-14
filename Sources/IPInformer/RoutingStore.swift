@@ -607,7 +607,8 @@ final class RoutingStore: ObservableObject {
                 groupID: groupID,
                 profileID: nil,
                 enabled: true,
-                launchAfterEngineReady: false
+                launchAfterEngineReady: false,
+                askChildCommands: true
             ))
         }
         return (additions, errors)

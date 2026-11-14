@@ -176,6 +176,7 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertTrue(planned.errors.isEmpty)
         XCTAssertEqual(planned.applications.map(\.name), ["First", "Second"])
         XCTAssertTrue(planned.applications.allSatisfy { $0.groupID == newGroup })
+        XCTAssertTrue(planned.applications.allSatisfy(\.askChildCommands))
         XCTAssertFalse(planned.applications.contains { $0.bundlePath == existingURL.path })
     }
 

@@ -205,12 +205,14 @@ final class SingBoxConfigurationTests: XCTestCase {
         }
     }
 
-    func testLocalAccessFlagDefaultsOffInOlderApplicationData() throws {
+    func testLegacyApplicationFlagsDefaultOff() throws {
         let app = application(name: "Old", profileID: nil)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(app)) as? [String: Any])
         object.removeValue(forKey: "allowLocalNetwork")
+        object.removeValue(forKey: "askChildCommands")
         let decoded = try JSONDecoder().decode(RoutedApplication.self, from: JSONSerialization.data(withJSONObject: object))
         XCTAssertFalse(decoded.allowLocalNetwork)
+        XCTAssertFalse(decoded.askChildCommands)
         var updated = decoded
         updated.allowLocalNetwork = true
         XCTAssertTrue(try JSONDecoder().decode(RoutedApplication.self, from: JSONEncoder().encode(updated)).allowLocalNetwork)
