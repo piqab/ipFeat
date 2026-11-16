@@ -19,12 +19,58 @@ enum ProcessAIProvider: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum ProcessAILanguage: String, Codable, CaseIterable, Identifiable {
+    case system
+    case russian
+    case english
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "macOS language"
+        case .russian: "Русский"
+        case .english: "English"
+        case .custom: "Other language…"
+        }
+    }
+}
+
 struct ProcessAIProfile: Codable, Equatable, Identifiable {
-    var id = UUID()
+    var id: UUID
     var name: String
     var provider: ProcessAIProvider
     var endpoint: String
     var model: String
+    var language: ProcessAILanguage
+    var customLanguage: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, provider, endpoint, model, language, customLanguage
+    }
+
+    init(id: UUID = UUID(), name: String, provider: ProcessAIProvider, endpoint: String,
+         model: String, language: ProcessAILanguage = .system, customLanguage: String = "") {
+        self.id = id
+        self.name = name
+        self.provider = provider
+        self.endpoint = endpoint
+        self.model = model
+        self.language = language
+        self.customLanguage = customLanguage
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        provider = try values.decode(ProcessAIProvider.self, forKey: .provider)
+        endpoint = try values.decode(String.self, forKey: .endpoint)
+        model = try values.decode(String.self, forKey: .model)
+        language = try values.decodeIfPresent(ProcessAILanguage.self, forKey: .language) ?? .system
+        customLanguage = try values.decodeIfPresent(String.self, forKey: .customLanguage) ?? ""
+    }
 }
 
 struct ProcessAISettingsSnapshot: Codable {
@@ -63,11 +109,14 @@ final class ProcessAISettings: ObservableObject {
                                        name: profile.name.trimmingCharacters(in: .whitespacesAndNewlines),
                                        provider: profile.provider,
                                        endpoint: profile.endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-                                       model: profile.model.trimmingCharacters(in: .whitespacesAndNewlines))
+                                       model: profile.model.trimmingCharacters(in: .whitespacesAndNewlines),
+                                       language: profile.language,
+                                       customLanguage: profile.customLanguage.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !trimmed.name.isEmpty, !trimmed.model.isEmpty else {
             throw ProcessAIError.invalidSettings("Enter a profile name and model.")
         }
         try ProcessAIClient.validateProfileEndpoint(trimmed, key: key ?? ProcessAIKeychain.load(id: profile.id))
+        try ProcessAIClient.validateProfileLanguage(trimmed)
         if let key, !key.isEmpty { try ProcessAIKeychain.save(key, id: profile.id) }
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = trimmed
@@ -204,6 +253,10 @@ enum ProcessAIClient {
         _ = try resolvedURL(for: profile, key: key)
     }
 
+    static func validateProfileLanguage(_ profile: ProcessAIProfile) throws {
+        _ = try requestText(processPath: "", parentPath: nil, applicationName: nil, profile: profile)
+    }
+
     private static func resolvedURL(for profile: ProcessAIProfile, key: String?) throws -> URL {
         try validateEndpoint(profile.endpoint, key: key)
         var url = URL(string: profile.endpoint)!
@@ -280,8 +333,10 @@ enum ProcessAIClient {
         guard !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProcessAIError.invalidSettings("Select a model in Settings → AI.")
         }
-        let instruction = "Explain what a macOS process may be based only on the supplied paths. State uncertainty clearly. Explain a possible relationship to its parent. Do not claim that it is safe or unsafe and do not choose a network route. Be concise."
-        let context = "Executable: \(processPath)\nImmediate parent: \(parentPath ?? "unknown")\nRegistered application: \(applicationName ?? "none")"
+        let (instruction, context) = try requestText(
+            processPath: processPath, parentPath: parentPath,
+            applicationName: applicationName, profile: profile
+        )
         var body: [String: Any]
         switch profile.provider {
         case .openAICompatible, .ollama:
@@ -318,5 +373,40 @@ enum ProcessAIClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.withoutEscapingSlashes])
         return request
+    }
+
+    private static func requestText(processPath: String, parentPath: String?, applicationName: String?,
+                                    profile: ProcessAIProfile) throws -> (String, String) {
+        var language = profile.language
+        var customName = profile.customLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if language == .system {
+            let code = Locale.preferredLanguages.first?
+                .split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? "en"
+            switch code.lowercased() {
+            case "ru": language = .russian
+            case "en": language = .english
+            default:
+                language = .custom
+                customName = Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
+            }
+        }
+        if language == .russian {
+            return (
+                "Объясни, чем может быть процесс macOS, опираясь только на указанные пути. Ясно обозначь неопределённость и возможную связь с родительским процессом. Не утверждай, что процесс безопасен или опасен, и не выбирай сетевой маршрут. Ответь кратко по-русски.",
+                "Исполняемый файл: \(processPath)\nНепосредственный родитель: \(parentPath ?? "неизвестен")\nЗарегистрированная программа: \(applicationName ?? "нет")"
+            )
+        }
+        let english = "Explain what a macOS process may be based only on the supplied paths. State uncertainty clearly. Explain a possible relationship to its parent. Do not claim that it is safe or unsafe and do not choose a network route. Be concise."
+        if language == .custom {
+            guard !customName.isEmpty, customName.count <= 80,
+                  !customName.contains("\n"), !customName.contains("\r") else {
+                throw ProcessAIError.invalidSettings("Enter a language name of up to 80 characters.")
+            }
+        }
+        let instruction = language == .custom ? "\(english) Answer in \(customName)." : "\(english) Answer in English."
+        return (
+            instruction,
+            "Executable: \(processPath)\nImmediate parent: \(parentPath ?? "unknown")\nRegistered application: \(applicationName ?? "none")"
+        )
     }
 }

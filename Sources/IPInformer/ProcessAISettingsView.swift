@@ -7,6 +7,8 @@ struct ProcessAISettingsView: View {
     @State private var provider: ProcessAIProvider = .ollama
     @State private var endpoint = ProcessAIProvider.ollama.defaultEndpoint
     @State private var model = ""
+    @State private var language: ProcessAILanguage = .system
+    @State private var customLanguage = ""
     @State private var key = ""
     @State private var message = ""
     @State private var isTesting = false
@@ -60,6 +62,17 @@ struct ProcessAISettingsView: View {
                     }
                 }
                 TextField("Model ID", text: $model)
+                Picker("Request and answer language", selection: $language) {
+                    ForEach(ProcessAILanguage.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                if language == .custom {
+                    TextField("Language name, for example Español", text: $customLanguage)
+                    Text("For other languages, the request text stays in English and asks the model to answer in the named language.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 SecureField("API key (leave blank to keep saved key)", text: $key)
                 if ProcessAIKeychain.load(id: editingID) != nil {
                     HStack {
@@ -103,6 +116,8 @@ struct ProcessAISettingsView: View {
         provider = profile.provider
         endpoint = profile.endpoint
         model = profile.model
+        language = profile.language
+        customLanguage = profile.customLanguage
         key = ""
         message = ""
     }
@@ -113,6 +128,8 @@ struct ProcessAISettingsView: View {
         provider = .ollama
         endpoint = ProcessAIProvider.ollama.defaultEndpoint
         model = ""
+        language = .system
+        customLanguage = ""
         key = ""
         message = ""
     }
@@ -120,7 +137,8 @@ struct ProcessAISettingsView: View {
     private func save() {
         do {
             try settings.save(ProcessAIProfile(id: editingID, name: name, provider: provider,
-                                               endpoint: endpoint, model: model),
+                                               endpoint: endpoint, model: model,
+                                               language: language, customLanguage: customLanguage),
                               key: key.isEmpty ? nil : key)
             key = ""
             message = "Model saved and selected."
@@ -139,7 +157,8 @@ struct ProcessAISettingsView: View {
 
     private func test() {
         let profile = ProcessAIProfile(id: editingID, name: name.isEmpty ? "Test" : name,
-                                       provider: provider, endpoint: endpoint, model: model)
+                                       provider: provider, endpoint: endpoint, model: model,
+                                       language: language, customLanguage: customLanguage)
         isTesting = true
         message = "Testing the current fields…"
         Task {

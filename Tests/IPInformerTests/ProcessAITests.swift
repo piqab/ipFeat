@@ -106,4 +106,40 @@ final class ProcessAITests: XCTestCase {
             XCTAssertTrue($0.localizedDescription.contains("retired"))
         }
     }
+
+    func testRequestLanguageIsSavedAndChangesPromptText() throws {
+        let base = ProcessAIProfile(name: "Local", provider: .ollama,
+                                    endpoint: "http://127.0.0.1:11434/api/chat", model: "test")
+        var legacyJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(base)) as? [String: Any])
+        legacyJSON.removeValue(forKey: "language")
+        legacyJSON.removeValue(forKey: "customLanguage")
+        let restored = try JSONDecoder().decode(ProcessAIProfile.self,
+                                                from: JSONSerialization.data(withJSONObject: legacyJSON))
+        XCTAssertEqual(restored.language, .system)
+
+        var russian = base
+        russian.language = .russian
+        let russianBody = try XCTUnwrap(ProcessAIClient.makeRequest(
+            processPath: "/usr/bin/curl", parentPath: nil, applicationName: nil,
+            profile: russian, key: nil).httpBody)
+        XCTAssertTrue(String(decoding: russianBody, as: UTF8.self).contains("Ответь кратко по-русски"))
+        XCTAssertTrue(String(decoding: russianBody, as: UTF8.self).contains("Исполняемый файл"))
+
+        var english = base
+        english.language = .english
+        let englishBody = try XCTUnwrap(ProcessAIClient.makeRequest(
+            processPath: "/usr/bin/curl", parentPath: nil, applicationName: nil,
+            profile: english, key: nil).httpBody)
+        XCTAssertTrue(String(decoding: englishBody, as: UTF8.self).contains("Answer in English"))
+
+        var custom = base
+        custom.language = .custom
+        custom.customLanguage = "Español"
+        let customBody = try XCTUnwrap(ProcessAIClient.makeRequest(
+            processPath: "/usr/bin/curl", parentPath: nil, applicationName: nil,
+            profile: custom, key: nil).httpBody)
+        XCTAssertTrue(String(decoding: customBody, as: UTF8.self).contains("Answer in Español"))
+        custom.customLanguage = ""
+        XCTAssertThrowsError(try ProcessAIClient.validateProfileLanguage(custom))
+    }
 }
