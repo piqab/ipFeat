@@ -229,6 +229,12 @@ final class RoutingStore: ObservableObject {
         persistAndRegenerate()
     }
 
+    func setAskUnknownProcesses(_ enabled: Bool) {
+        guard configuration.askUnknownProcesses != enabled else { return }
+        configuration.askUnknownProcesses = enabled
+        persistAndRegenerate()
+    }
+
     func addProfile() {
         configuration.profiles.append(RoutingProfile(outboundTag: outboundTags.first ?? ""))
         persistAndRegenerate()

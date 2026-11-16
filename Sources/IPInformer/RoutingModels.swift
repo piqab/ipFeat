@@ -197,13 +197,15 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
     var mainConfigurationJSON = Self.defaultMainConfigurationJSON
     var defaultRoute: DefaultRoute?
     var webKitProxyEnabled = false
+    var askUnknownProcesses = false
     var selfProxySeeded = false
     var redirects: [ApplicationRedirect] = []
     var clientConnections: [ClientConnection] = []
 
     private enum CodingKeys: String, CodingKey {
         case profiles, groups, applications, commands, childCommandChoices, singBoxAlwaysOn, serviceStartsAtBoot
-        case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProxyEnabled, selfProxySeeded, redirects, clientConnections
+        case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProxyEnabled, askUnknownProcesses
+        case selfProxySeeded, redirects, clientConnections
     }
 
     init(
@@ -217,7 +219,8 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         mainConfigurationJSON: String = Self.defaultMainConfigurationJSON,
         redirects: [ApplicationRedirect] = [],
         defaultRoute: DefaultRoute? = nil,
-        webKitProxyEnabled: Bool = false
+        webKitProxyEnabled: Bool = false,
+        askUnknownProcesses: Bool = false
     ) {
         self.profiles = profiles
         self.groups = groups
@@ -229,6 +232,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         self.mainConfigurationJSON = mainConfigurationJSON
         self.defaultRoute = defaultRoute
         self.webKitProxyEnabled = webKitProxyEnabled
+        self.askUnknownProcesses = askUnknownProcesses
         self.redirects = redirects
     }
 
@@ -246,6 +250,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
             ?? Self.defaultMainConfigurationJSON
         defaultRoute = try values.decodeIfPresent(DefaultRoute.self, forKey: .defaultRoute)
         webKitProxyEnabled = try values.decodeIfPresent(Bool.self, forKey: .webKitProxyEnabled) ?? false
+        askUnknownProcesses = try values.decodeIfPresent(Bool.self, forKey: .askUnknownProcesses) ?? false
         selfProxySeeded = try values.decodeIfPresent(Bool.self, forKey: .selfProxySeeded) ?? false
         redirects = try values.decodeIfPresent([ApplicationRedirect].self, forKey: .redirects) ?? []
         clientConnections = try values.decodeIfPresent([ClientConnection].self, forKey: .clientConnections) ?? []

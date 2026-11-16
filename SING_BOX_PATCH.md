@@ -1,20 +1,19 @@
-# Изменения sing-box для IP Informer
+# IP Informer sing-box patch
 
-Этот документ описывает контракт между IP Informer и локальным движком sing-box на macOS. Он нужен при переносе патча на новую версию sing-box. Текущая реализация: исходник sing-box `v1.14.4` (`c005f35300ce76427dc285481ec5695f5b179cd2`), патч [`patches/sing-box-1.14.4-ipinformer-2.patch`](patches/sing-box-1.14.4-ipinformer-2.patch), сборка [`scripts/build-patched-sing-box.sh`](scripts/build-patched-sing-box.sh). Серверный sing-box на VPS остаётся официальным: расширения ниже нужны только локальному маршрутизатору.
+This document describes the contract between IP Informer and its local macOS sing-box engine. It is the reference for porting the patch to another sing-box release. The current source is sing-box `v1.14.4` at `c005f35300ce76427dc285481ec5695f5b179cd2`, with [patch revision 3](patches/sing-box-1.14.4-ipinformer-3.patch) built by [build-patched-sing-box.sh](scripts/build-patched-sing-box.sh). The VPS uses an official sing-box binary.
 
-## Зачем нужен патч
+## Why the local patch exists
 
-Обычный sing-box читает правила при запуске и может определить исполняемый файл владельца соединения. IP Informer дополнительно требует:
+1. Apply app, group and command rules without restarting TUN or dropping existing connections.
+2. Attribute a connection to its socket owner and verified parent chain. This lets a child such as `curl`, `ssh` or `git` inherit the relevant app's route.
+3. Before a new public IPv4 connection, ask IP Informer for a route when an app's child command has no saved choice.
+4. Optionally ask for a route for any unlisted app, command or background process on its first public IPv4 connection **of each launch**.
 
-1. Менять правила программ, групп и команд без перезапуска TUN и обрыва действующих соединений.
-2. Различать саму программу и её дочерние процессы, в том числе `curl`/`ssh` из iTerm2, чтобы маршрут наследовался по проверенной цепочке родителей.
-3. Перед первым внешним IPv4-соединением неизвестной дочерней команды запросить выбор маршрута у IP Informer и применить ответ к этому соединению.
+IPv4 configuration generation, profiles, groups, local network access, WebKit handling, public IP probes and the user interface live in IP Informer.
 
-Генерация IPv4-конфигурации, профили, группы, локальные сети, WebKit, проверка внешнего IP и UI находятся в IP Informer. Сам по себе патч sing-box не добавляет эти экраны и настройки.
+## Live policy
 
-## Контракт конфигурации
-
-IP Informer создаёт `sing-box-base.json` и `sing-box-policy.json` в `~/Library/Application Support/IPInformer/`. Базовый JSON содержит TUN, DNS, inbound, outbound, инфраструктурные и общие правила. Он остаётся неизменным при добавлении или переносе программы. Файл policy содержит меняющиеся правила, описания запросов и путь локального Unix-сокета:
+IP Informer writes `sing-box-base.json` and `sing-box-policy.json` under `~/Library/Application Support/IPInformer/`. The base contains TUN, DNS, inbounds, outbounds and stable rules. The policy contains rules that can change while sing-box runs:
 
 ```json
 {
@@ -29,39 +28,42 @@ IP Informer создаёт `sing-box-base.json` и `sing-box-policy.json` в `~/
       "exclude_process_paths": ["/usr/bin/ssh"]
     }
   ],
+  "ask_unknown_processes": true,
+  "known_process_paths": ["/usr/bin/ssh"],
+  "known_process_path_regex": ["^/Applications/Example\\.app/"],
   "socket_path": "/Users/USER/Library/Application Support/IPInformer/child-route.sock"
 }
 ```
 
-Движок запускается с `--ipinformer-policy PATH` и командой `run` либо проверяется через `check -c BASE --ipinformer-policy POLICY`. При обновлении IP Informer атомарно записывает policy. Патч проверяет изменение файла, собирает новые правила и атомарно заменяет таблицу маршрутизации только после успешной проверки. При ошибке остаются прежние правила; процесс не должен падать. Новые соединения получают новую таблицу, уже открытые TCP/UDP-соединения сохраняют выбранный outbound. Замена outbound, TUN или DNS в базовой конфигурации требует обычного перезапуска службы.
+The engine starts with `run --ipinformer-policy PATH`; validation uses `check -c BASE --ipinformer-policy POLICY`. IP Informer atomically replaces the policy file. sing-box validates a changed policy before replacing its routing table. Invalid changes leave the previous table active. Existing TCP and UDP flows keep their selected outbound; changing base outbounds, TUN or DNS still requires a service restart.
 
-Дополнительное условие правила `ancestor_process_path_regex` сопоставляет **только** пути проверенных родителей. Обычное `process_path_regex` по-прежнему сопоставляет путь самого владельца сокета. IP Informer использует логическое `or` этих условий для наследования маршрута программой и её дочерними процессами.
+`ancestor_process_path_regex` matches only verified parent executable paths. Ordinary `process_path_regex` matches the socket owner's executable. IP Informer combines these conditions to cover an app and its descendants.
 
-## Определение владельца на macOS
+## macOS process attribution
 
-- Найти владельца TCP/UDP-сокета по исходному адресу и порту. Если UDP-запись неоднозначна, не назначать произвольный PID.
-- Проверить PID, UID и время запуска до и после чтения пути исполняемого файла. Не использовать устаревший кэш владельца при активной policy: macOS может повторно выдать тот же локальный порт другому процессу.
-- Подняться по цепочке родителей с проверкой PID, UID и времени запуска на каждом шаге; ограничить глубину и прервать обход при сомнительных данных.
-- В цепочке iTerm2 допустим один переход через системный root-процесс с точным путём `/usr/bin/login`. Сам `login` не становится совпадающим приложением. Через `sudo` или другой root-процесс маршрут родителя не наследуется.
-- Если `proc_pidinfo(PROC_PIDTBSDINFO)` недоступен для `login`, использовать `kern.proc.pid` с той же проверкой идентичности. При отсутствии достоверной цепочки применяется обычное правило команды или общий маршрут.
+- Look up the TCP or UDP socket owner by source address and port. Ambiguous UDP ownership must never be assigned to an arbitrary PID.
+- Verify PID, UID and process start time before and after reading the executable path. Do not reuse a stale owner cache while live policy is active.
+- Walk the parent chain with the same identity checks and a depth limit. Stop if identity cannot be verified.
+- The iTerm2 chain may cross exactly one verified system `/usr/bin/login` process. `login` itself is not treated as the app. Do not inherit through `sudo` or another root process.
+- When `proc_pidinfo(PROC_PIDTBSDINFO)` is unavailable for `login`, use `kern.proc.pid` with the same identity checks.
 
-Основные точки патча: `common/process/ancestor_darwin.go`, `common/process/searcher_darwin_shared.go`, `route/process_cache.go`, `route/rule/rule_item_process_path_regex.go`, `option/rule.go` и `option/rule_set.go` внутри исходников sing-box.
+The implementation touches `common/process/ancestor_darwin.go`, `common/process/searcher_darwin_shared.go`, `route/process_cache.go`, `route/rule/rule_item_process_path_regex.go`, `option/rule.go` and `option/rule_set.go` in sing-box.
 
-## Запрос маршрута дочерней команды
+## Route prompts
 
-- Запрос допустим только при достоверном владельце и родителе, для **публичного IPv4** и не для DNS-порта 53. Локальные, частные и link-local IPv4 проходят по обычным правилам без ожидания ответа.
-- Само приложение из `process_path_regex` не запрашивается; запрос относится к неизвестному дочернему исполняемому файлу. `exclude_process_paths` содержит команды с уже сохранённым личным выбором или явным глобальным правилом.
-- До выбора первое подходящее соединение ждёт ответ UI. Одновременные соединения той же пары «программа + путь команды» разделяют один запрос. Ограничения текущего патча: ожидание до 8 секунд, не более 16 ожидающих и 1024 записей выбора в памяти.
-- Движок отправляет в Unix-сокет JSON-строку с `id`, `application_id`, `application_name`, `command_path` и принимает JSON-строку с тем же `id` и `route`. Путь сокета и UID ответившего процесса проверяются; допустим только существующий outbound или `reject`.
-- Если UI не отвечает, сокет недоступен или ответ некорректен, соединение получает обычный маршрут программы/группы. IP Informer сохраняет подтверждённый выбор в настройках и отражает его в policy при следующих изменениях.
+Prompts require a verified socket owner, a public IPv4 destination and a non-DNS destination port. Private, localhost and link-local IPv4 connections use ordinary rules without waiting. For a child command, a verified parent must match a configured app, and a saved child choice or explicit command rule suppresses the prompt. The child choice is keyed by app ID and executable path and persists in IP Informer settings.
 
-Порядок правил, который формирует IP Informer: явное правило для дочерней команды внутри программы; глобальное правило команды; локальный IPv4 при разрешённом прямом доступе; правило самой программы/группы; маршрут остальных программ. Для нового неизвестного потомка запрос выполняется перед обычным подбором правила. Это поведение реализовано в `route/ipinformer_prompt.go`, `route/ipinformer_live.go` и `route/route.go` патча.
+When the optional unknown-process prompt is enabled, it covers processes absent from known app and command paths. A choice is keyed by UID, PID, process start time and executable path. It applies only to that process instance, so the next launch asks again. The parent path is included in the request to help identify helpers such as `git` launched by `brew`; the socket owner remains the actual process named in the prompt. Unknown choices are kept in a bounded in-memory cache. Completed unknown choices are evicted oldest-first if the cache fills.
 
-## Перенос на другую версию
+The engine sends a JSON line over a local Unix socket with `id`, `kind` (`child` or `unknown`), `application_id`, `application_name`, `command_path` and optional `parent_path`. The reply contains the same `id` and a route tag or `reject`. The socket and peer UID are verified; unknown tags are rejected. At most 16 prompts are in flight. The UI has an 18-second deadline and the engine has a 20-second deadline. Concurrent connections sharing a key share one request. An unanswered, invalid or timed-out request follows the app/group or default route. Expired queued prompts are discarded so they do not appear late. The UI handles incoming sockets independently so one open alert does not block receipt of another request.
 
-1. Закрепить точный upstream-коммит, перенести изменения исходников и обновить идентификатор `IPInformer patch` в `sing-box version`. Не считать патч совместимым только по совпадению номера версии.
-2. Проверить компиляцию и тесты Go для атрибуции процессов, неоднозначных UDP-сокетов, `ancestor_process_path_regex`, live-policy и запроса публичного IPv4. Проверить, что через `/usr/bin/login` доходит iTerm2 и что через `sudo` обход не проходит.
-3. Прогнать Swift-тесты генератора и `sing-box check` для пары base/policy. Проверить при запущенном TUN: смену маршрута программы без обрыва чужих соединений, `curl -4 https://api.ipify.org` из iTerm2 с запросом, `ssh` к публичному и локальному IPv4, отказ UI и возврат к официальному бинарнику.
-4. После проверки обновить скрипты сборки и установки, SHA-256 упакованного бинарника и блокировку автоматического обновления на несовместимую официальную версию. Сохранять официальный бинарник для отката.
+IP Informer generates rules in this order: saved child command choice, global command choice, permitted direct local IPv4, app/group route, then default route. The prompt is evaluated before the ordinary rule selection. The relevant patch files are `route/ipinformer_prompt.go`, `route/ipinformer_live.go` and `route/route.go`.
 
-Текущие ограничения: запрос маршрута относится к IPv4-соединениям, требует работающего IP Informer и установленного патча. Без патча настройки выбора дочерних команд не перехватывают первое соединение. Вновь добавленным программам IP Informer включает галочку запроса по умолчанию; прежние сохранённые настройки не меняются.
+## Porting and verification
+
+1. Pin the exact upstream commit, port the source changes and update the `IPInformer patch` revision reported by `sing-box version`. Matching version numbers alone do not imply compatibility.
+2. Run Go tests for process attribution, ambiguous UDP sockets, parent matching, live policy and public IPv4 prompts. Verify iTerm2 through `/usr/bin/login` and the boundary at `sudo`.
+3. Run Swift generator tests and `sing-box check` for the base/policy pair. On a live TUN, check rule changes without dropping other connections, `curl -4 https://api.ipify.org` from iTerm2, public and local SSH destinations, unlisted processes across two launches, prompt timeout and official-binary rollback.
+4. Update the build and installer scripts, bundled SHA-256, and the guard against incompatible automatic official updates. Keep the official binary for rollback.
+
+Prompt interception requires the patched local engine and a running IP Informer. The per-app child prompt is enabled by default for newly added apps; saved settings for existing apps are unchanged. The global unknown-process prompt is off by default.

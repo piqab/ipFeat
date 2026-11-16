@@ -141,14 +141,16 @@ struct SingBoxSettingsView: View {
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.activePatchRevision == 1 ? "Доступно исправление наследования команд iTerm2 через системный login" :
-                        engine.isPatched ? "Патч IP Informer 1.14.4-2 активен · правила программ обновляются без обрыва соединений" :
-                        "Патч IP Informer 1.14.4-2 добавляет обновление правил и маршруты дочерних команд")
+                Text(engine.isPatched && engine.activePatchRevision != 3
+                     ? "Patch 1.14.4-3 adds timely prompts and optional routing for unlisted processes."
+                     : engine.isPatched
+                       ? "Patch 1.14.4-3 active · application rules update without disconnecting existing connections."
+                       : "Patch 1.14.4-3 adds live rules and route prompts for child and unlisted processes.")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
-                    if engine.activePatchRevision == 1 {
-                        Button("Обновить патч") { Task { await engine.installPatch() } }
+                    if engine.activePatchRevision != 3 {
+                        Button("Update patch") { Task { await engine.installPatch() } }
                             .disabled(engine.isInstalling)
                     }
                     Button("Вернуть официальный") { Task { await engine.removePatch() } }

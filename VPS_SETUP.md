@@ -1,22 +1,19 @@
-# Собственный источник внешнего IPv4 на VPS
+# Your own public IPv4 endpoint on a VPS
 
-IP Informer принимает два формата ответа:
-
-- обычный текст: `203.0.113.10`
-- JSON: `{"ip":"203.0.113.10"}`
+IP Informer accepts plain text such as `203.0.113.10` or JSON such as `{"ip":"203.0.113.10"}`.
 
 ## DNS
 
-Создайте запись `A` для имени, например `ip.example.com`, направленную на IPv4 VPS. Не создавайте для этого имени запись `AAAA`, если хотите всегда получать именно IPv4.
+Create an `A` record for a name such as `ip.example.com` pointing to the VPS IPv4 address. Omit an `AAAA` record if you want this hostname to resolve only to IPv4.
 
-## Nginx на Ubuntu или Debian
+## Nginx on Ubuntu or Debian
 
 ```sh
 sudo apt update
 sudo apt install nginx certbot python3-certbot-nginx
 ```
 
-Создайте `/etc/nginx/sites-available/ip-endpoint`:
+Create `/etc/nginx/sites-available/ip-endpoint`:
 
 ```nginx
 server {
@@ -32,7 +29,7 @@ server {
 }
 ```
 
-Включите конфигурацию и HTTPS:
+Enable the site and HTTPS:
 
 ```sh
 sudo ln -s /etc/nginx/sites-available/ip-endpoint /etc/nginx/sites-enabled/ip-endpoint
@@ -42,4 +39,4 @@ sudo certbot --nginx -d ip.example.com
 curl https://ip.example.com
 ```
 
-После проверки добавьте `https://ip.example.com` в настройках IP Informer. Эндпоинт по назначению сообщает посетителю его публичный IP; `access_log off` отключает хранение этих адресов в отдельном журнале Nginx.
+After verifying the response, add `https://ip.example.com` as a custom source in IP Informer settings. This endpoint is designed to reveal a visitor's public IP; `access_log off` prevents storing it in a separate Nginx access log.

@@ -1,121 +1,64 @@
-# Маршрутизация приложений через sing-box
+# Application routing with sing-box
 
-IP Informer управляет одной основной конфигурацией sing-box и генерирует из неё рабочий файл. Один TUN `utun100` обслуживает сеть, а правила `process_path` направляют каждую выбранную программу или группу в outbound по его устойчивому `tag`.
+IP Informer owns one system TUN, normally `utun100`, and routes traffic according to an app, group, command or default profile. It generates the working sing-box configuration from the base JSON in the **sing-box** tab. Imported TUN inbounds are replaced with the managed TUN; other inbounds remain. A line-by-line diff and `sing-box check` run before saving. The last 30 base JSON versions can be compared and restored.
 
-## Основная конфигурация
+## Profiles, apps and commands
 
-Во вкладке **Программы → Основная конфигурация sing-box** можно вставить JSON или импортировать готовый файл. В основной конфигурации находятся:
+The **Profiles** tab includes one profile for each outbound tag and built-in **No network**, **This Mac only** and **Local network** profiles. The **Applications** tab assigns a route to each group or ungrouped app. A group route takes priority over an app's saved personal route; moving the app to the ungrouped row restores its personal route. A disabled app is covered by the default route. IP Informer registers itself with `proxy` if that outbound exists. Helpers inside an app bundle follow the app rule; external helpers may require their own rule.
 
-- DNS;
-- outbounds и их серверы, ключи, цепочки и `bind_interface`;
-- общие правила маршрутизации;
-- дополнительные inbound, кроме TUN.
+**Default route** applies to every other app, including disabled and unregistered ones. It can use any outbound tag, allow only localhost, or block public access. Managed default rules precede imported general rules. Localhost remains accessible in restricted modes. All ordinary traffic traverses the managed TUN; IP Informer does not silently bypass it.
 
-TUN добавляет сам IP Informer. Если импортированный файл содержит собственный TUN inbound, он автоматически заменяется на единственный `utun100`; `mixed`, SOCKS, HTTP и другие inbounds сохраняются. После нажатия **Сравнить и сохранить** показывается diff, затем файл проверяется настоящей командой `sing-box check`. Некорректное изменение не заменяет последнюю рабочую конфигурацию службы.
+Each app can permit direct local IPv4 access even while its public traffic uses a proxy or is blocked. Connected private subnets use the matching physical interface. Other private IPv4 uses a direct system route. The built-in **Local network** profile allows localhost, RFC1918, link-local and mDNS/Bonjour but rejects public destinations. Local network interface changes are checked locally about every 10 seconds. IPv6 is intercepted and rejected; DNS strategy is IPv4 only.
 
-Основная конфигурация и её история находятся во вкладке «sing-box», профили — во вкладке «Профили». Перед сохранением JSON показывается построчное сравнение, а до 30 последних версий можно открыть для сравнения и восстановления. Правило конкретной программы вставляется перед общими правилами основной конфигурации. Оно охватывает главный процесс и вспомогательные процессы внутри выбранной `.app`, включая вложенные Helper и XPC. Для программы в группе действует профиль группы, даже если у неё сохранён личный профиль; при переносе в «Без группы» личный профиль снова применяется. Если у группы нет профиля, действует общий маршрут. IP Informer добавляет собственную запись автоматически с профилем `proxy`, если такой outbound есть; путь к его `.app` обновляется при запуске. Помощники, установленные за пределами `.app`, требуют отдельного правила. Для выключенной программы профиль не применяется и запуск из IP Informer недоступен.
+The **Terminal commands** section assigns a route to an exact executable path such as `/usr/bin/ssh`, `/usr/bin/curl` or `/usr/bin/nc`. This applies from any terminal. Local IPv4 access can be allowed per command, while public IPv4 follows its assigned outbound. An explicit child command choice takes priority over a global command rule, which takes priority over the app or group route. For `ssh` with `ProxyCommand`, the helper that owns the socket is routed separately.
 
-### Новый сервер и библиотека клиентов
+With local patch `1.14.4-3`, newly added apps enable **Ask for a route for child commands** by default. The first public IPv4 connection from an unknown child command asks for a route, which is saved for that app and executable path. A verified parent chain attributes iTerm2 shells through `/usr/bin/login`; it does not inherit through `sudo`. A popup names the socket owner and immediate parent. If `brew` invokes `git`, the socket owner may be `git`.
 
-Во вкладке **sing-box → Клиентские подключения** нажмите **Новый сервер…**. Мастер предназначен для нового Linux VPS с systemd и публичным IPv4. Название дистрибутива не ограничено: поддерживаются архитектуры `x86_64` и `aarch64`/`arm64`, а на VPS нужны `/bin/bash`, `curl`, `tar`, `sha256sum` и работающий `systemctl`. Debian 13 подходит при соблюдении этих условий. Мастер использует установленную на Mac версию sing-box и закрепляет её за созданными конфигами. Укажите IPv4, порт сервиса и SSH-порт. Для входа выберите пароль `root` либо SSH-ключ (`root` или пользователь с `sudo` без пароля). Пароль используется только во время установки и не сохраняется; на VPS должен быть разрешён вход `root` по SSH с паролем. При первом подключении SSH-ключ сервера сохраняется в `known_hosts`, изменившийся ключ отклоняется. Мастер не заменяет уже установленный им сервер.
+An optional **Ask for a route for unlisted processes** toggle under Default route also covers apps, commands and user background processes absent from the IP Informer list. It asks on the first public IPv4 connection of each process launch. The answer lasts for that process instance. Local IPv4 connections do not wait, and if the popup cannot answer, the configured route applies. An open or expired popup cannot hold newer requests in the listener queue. Details: [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
 
-Список технологий и полей берётся из `sing-box schema` установленной версии. Для VLESS + Reality, Shadowsocks 2022, VMess, Trojan, Hysteria2 и AnyTLS мастер автоматически создаёт согласованные клиентский и серверный JSON с новыми ключами. Для TLS-протоколов выберите ACME (домен должен указывать на VPS, порты 80/443 доступны) либо локальные PEM-файлы сертификата и ключа. PEM встраивается в JSON, отдельные файлы на VPS не нужны. Другие inbound с клиентским outbound доступны в ручном режиме: оба JSON можно редактировать, заполнив поля выбранной технологии. Endpoint не предлагаются как готовая пара клиент–сервер. Перед отправкой на VPS мастер проверяет оба файла через `sing-box check`, совпадение IPv4 и порта, отсутствие ссылок на внешние файлы и возможность включить outbound в текущую конфигурацию IP Informer.
+The WebKit option routes `com.apple.WebKit.Networking` through `proxy` before the default route. It can help Telegram Web Apps, but the system WebKit process may serve embedded pages from other apps too.
 
-После проверки IP Informer открывает окно лога и подключается по SSH. Лог показывает команды, вывод сервера и код завершения; пароль SSH в него не записывается. Мастер отдельно определяет ОС, архитектуру, путь `systemctl` и процесс инициализации, чтобы показать конкретную причину отказа. Затем он скачивает официальный Linux-архив закреплённой версии, сверяет SHA-256, устанавливает исполняемый файл с правами `755`, проверяет установленную версию и серверный JSON, включает и запускает отдельную службу `ipinformer-sing-box`. Если установка завершается с ошибкой, новые файлы и служба удаляются. Окно лога остаётся доступным для просмотра и копирования ошибки. Порт сервиса должен быть разрешён в сетевом экране VPS и у облачного провайдера; мастер сообщает об этой проверке после установки. Связь с VPS в этом сценарии использует только IPv4.
+## Live rules and connection stability
 
-Установленный клиентский outbound добавляется в основную конфигурацию и появляется как профиль для программ, групп и общего маршрута. Создавайте несколько серверов и переключайте общий маршрут кнопкой **Сделать общим**, либо назначайте конкретный профиль группе или программе. Кнопка **Клиентский JSON** показывает самостоятельную конфигурацию выбранного подключения с IPv4 DNS и TUN; **Серверный JSON** показывает сохранённую конфигурацию VPS. Серверный JSON с закрытым ключом хранится в Keychain и включается в зашифрованный экспорт. Архив переносит все клиентские подключения на другой Mac; новые VPS при восстановлении повторно не разворачиваются.
+With the patch active, IP Informer keeps a stable `sing-box-base.json` and a separate `sing-box-policy.json`. Adding, removing or moving apps rewrites only policy; sing-box reloads it without restarting TUN. Established flows retain their outbound, and new flows use the new rules. Changing base DNS, TUN or outbounds still restarts the service. An unpatched engine uses compatible `sing-box.json` and restarts on rule changes. One multi-app selection generates one update.
 
-Кнопка **Удалить…** у клиентского подключения предлагает маршрут замены для программ, групп и общего правила. Можно удалить только локальное подключение либо удалить службу на VPS и затем локальное подключение. Для VPS снова вводятся SSH-порт и пароль `root` или ключ; приложение проверяет, что файл службы принадлежит IP Informer, останавливает её и удаляет только `/etc/ipinformer-sing-box`, `/usr/local/lib/ipinformer-sing-box` и её unit. Если IP Informer использует удаляемый сервер для SSH, приложение заранее переключает маршруты на выбранный сетевой профиль. При ошибке удалённой операции запись и outbound на Mac сохраняются, переключённые маршруты остаются на новом профиле, а лог показывает ответ VPS. Локальное удаление убирает outbound из текущего JSON, его профиль и серверный JSON из Keychain; изменение основной конфигурации попадает в историю. Если outbound уже удалён вручную, окно укажет это и разрешит удалить оставшуюся запись на Mac и службу на VPS.
+The patch is bundled with the app, checked by SHA-256 and `sing-box check`, then installed with macOS administrator authorization. Existing revisions 1 and 2 can be upgraded to revision 3, preserving the official binary for rollback. Automatic updates to unrelated official versions are disabled while the patch is active. The local patch is never installed on a VPS.
 
-Отдельный выбор **Маршрут остальных программ** определяет путь для всех программ без действующего личного или группового профиля, включая выключенные и не добавленные в IP Informer. Можно выбрать любой `outbound.tag`, **Только этот Mac** или **Без сети**. Это правило ставится после правил назначенных программ и перед общими правилами импортированного JSON, поэтому последние не меняют выбранный маршрут для обычных программ. Служебные проверки и обработка DNS остаются перед ним. В обоих ограничительных вариантах обращения к localhost продолжают работать через системный `lo0`; внешний трафик блокируется. Трафик обычных программ всё равно проходит через TUN, а не обходит IP Informer на уровне системы.
+## New server and clients
 
-Для каждого outbound, который действует хотя бы для одной добавленной программы, включая общий маршрут, IP Informer создаёт отдельный служебный SOCKS-вход на `127.0.0.1`. При назначении или смене маршрута через него определяется внешний IPv4. Адрес отображается рядом с программой; `OFF` означает, что ни один включённый источник IP через этот outbound не ответил. При смене профиля обновляется только затронутый outbound; проверку можно повторить вручную для одной программы. Периодического опроса нет; проверки не меняют основной виджет и не вызывают звук или мигание. Одинаковый outbound проверяется один раз независимо от количества программ.
+The **sing-box → Client connections → New server** wizard creates a client/server pair for a new Linux VPS with systemd and public IPv4. It supports `x86_64` and `aarch64`/`arm64`; the VPS needs `/bin/bash`, `curl`, `tar`, `sha256sum` and working `systemctl`. Debian 13 is supported when these are present. The wizard uses the Mac's selected sing-box version and pins it to the generated configs.
 
-Список программ во вкладке «Программы» разбит на цветные сворачиваемые группы и раздел «Без группы». Заголовок группы показывает название и действующий маршрут; отдельная кнопка открывает редактирование названия, цвета и профиля. Новые группы вставляются сверху. Кнопка добавления в группе позволяет выбрать несколько `.app` за один раз; программы, уже находящиеся в любой группе, пропускаются без переноса. Цвет влияет только на отображение.
+Automatic pairs are available for VLESS + Reality, Shadowsocks 2022, VMess, Trojan, Hysteria2 and AnyTLS. TLS protocols can use ACME or embedded PEM certificate and private key. Other compatible inbound/outbound pairs can be edited manually. Both JSON files are checked before deployment. The installation log shows commands, remote output and exit status but omits the SSH password. The official Linux sing-box archive is checked by SHA-256, installed executable, validated, and launched as `ipinformer-sing-box`. If deployment fails, new remote files are removed.
 
-У каждой программы есть независимый переключатель **«Доступ к локальной сети напрямую»**. Он действует при любом выбранном маршруте, в том числе внутри группы. Подключённые IPv4-подсети идут через соответствующий физический интерфейс Mac; другие частные IPv4 и localhost используют прямой системный маршрут, если адрес достижим из сети Mac. Только эти адреса получают исключение перед правилом программы или группы. Публичный трафик продолжает следовать выбранному proxy, direct или блокировке. При профиле «Без сети» с включённым переключателем доступна локальная сеть, а публичная сеть остаётся заблокированной. IPv6 не используется. Системный сетевой процесс WebKit не принадлежит конкретной `.app`, поэтому этот переключатель не может отдельно применяться к Telegram Web Apps; для них действует общий переключатель WebKit.
+A saved connection can become the default route or an app/group profile. **Client JSON** exports a standalone IPv4 TUN profile; **Server JSON** shows the stored VPS config. **Share QRS** transfers a standalone client profile to the official sing-box Android app. Credentials are included in the QR. The **Delete** action can remove only the local connection or also remove the VPS service after SSH authorization. For remote deletion, IP Informer verifies service ownership and deletes only its dedicated files. If the outbound was manually removed earlier, the remaining connection record and VPS service can still be removed. See [VPS_SETUP.md](VPS_SETUP.md).
 
-Раздел **Команды терминала** добавляет правила по точному пути исполняемого файла. Можно выбрать несколько файлов или добавить типичные `/usr/bin/ssh`, `/usr/bin/curl` и `/usr/bin/nc` одной кнопкой. У каждой команды есть профиль и независимое разрешение локальных IPv4. При включённом разрешении подключённые подсети идут через соответствующий физический интерфейс, остальные частные IPv4 — через прямой системный маршрут; публичные IPv4 идут через выбранный профиль. Например, `ssh 192.168.11.185` использует `en0`, а `ssh example.com` с публичным IPv4 использует назначенный proxy. Глобальное правило команды действует из любого терминала. С патчем sing-box 1.14.4-2 можно также включить у конкретной программы запрос маршрута для дочерних команд. При первом публичном IPv4-соединении IP Informer предложит маршрут и запомнит его для этой программы и пути команды. Явное правило дочерней команды имеет приоритет перед глобальным правилом команды; глобальное правило — перед маршрутом программы. Если `ssh` использует `ProxyCommand`, сетевое соединение открывает вспомогательная команда, для которой выбор делается отдельно. Удалённый в основной конфигурации профиль переназначается на профиль замены вместе с программами и группами. В зашифрованном архиве правила команд сохраняются; ненайденные на другом Mac команды отключаются.
+## Backups and engine updates
 
-Переключатель **«Встроенные веб-приложения (WebKit) через proxy»** находится под общим маршрутом. Он добавляет правило для системного процесса `com.apple.WebKit.Networking` перед маршрутом остальных программ. Это помогает Telegram Web Apps при общем режиме «Только этот Mac» или «Без сети». Процесс WebKit обслуживает также встроенные страницы других программ, поэтому они тоже пойдут через `proxy`. Если outbound с тегом `proxy` отсутствует, переключатель недоступен.
+The encrypted settings archive contains base JSON and history, groups, profiles, apps, commands, client connections, redirects, IP sources, widget settings and launch-at-login preference. It uses AES-256-GCM with a password-derived PBKDF2-HMAC-SHA256 key. App bundles and system binaries are not included. Missing app and command paths are disabled after restore until reselected. A service installation is needed on the destination Mac.
 
-При активном патче IP Informer хранит неизменную основу `sing-box-base.json` и отдельный `sing-box-policy.json`. Добавление, удаление и перенос программы меняют только политику: sing-box загружает её без перезапуска TUN; старые соединения сохраняют свой маршрут, новые используют обновлённый. Изменение основы (например, списка outbound) всё ещё требует перезапуска. Официальный sing-box использует совместимый `sing-box.json` и перезапускается при изменении правил. Добавление нескольких программ за один выбор вызывает одно обновление.
+The **sing-box → Version** section can install an official macOS release, optionally including prereleases. Before switching, it verifies the downloaded archive, checks the binary version and validates the current JSON. Automatic stable-version installation is opt-in and does not run while a patched engine is active. The version history records dates, checksums, release notes, validation results and changed JSON paths without secret values.
 
-Зашифрованный архив из вкладки «sing-box» переносит JSON, историю, профили, группы, назначения программ и команд, перенаправления, источники IP, интервал, видимость и положения виджетов, а также настройку автозапуска. Для шифрования используется AES-256-GCM и ключ, полученный из пароля с PBKDF2-HMAC-SHA256; без пароля архив не открыть, изменение данных обнаруживается при проверке. На другом Mac программы сопоставляются по `bundleIdentifier`; ненайденные выключаются и могут быть привязаны к установленной `.app` вручную. Команды проверяются по пути, недоступные отключаются до повторного выбора файла. После восстановления требуется перезапуск IP Informer и установка системной службы на новом Mac. Позиции виджетов применятся к совпадающим идентификаторам экранов.
-
-Сгенерированная конфигурация использует только IPv4 для DNS и отклоняет IPv6-соединения до правил программ. IPv6-адрес TUN остаётся внутренним: он нужен, чтобы перехватывать и быстро отклонять попытки IPv6 вместо пропуска трафика мимо маршрута. Внешний IPv4 служебной проверки подтверждает доступность маршрута до источника IP, но не гарантирует доступность каждого сайта через `direct` или `bypass`.
-
-Профили создаются автоматически для каждого `outbound.tag`. Также всегда доступны три встроенных профиля: **Без сети**, **Только этот Mac** и **Локальная сеть**. Последний разрешает localhost, RFC1918, link-local и mDNS/Bonjour, но отклоняет публичные назначения. Для подключённых частных IPv4-подсетей IP Informer создаёт direct-выход с привязкой к соответствующему интерфейсу. Например, адрес `192.168.11.185` из подсети `192.168.11.0/24` на `en0` выходит через `en0`, даже если общий интерфейс Mac — `en6`. Изменение адресов и интерфейсов проверяется локально каждые 10 секунд; проверки внешнего IP при этом не запускаются.
-
-Таблица перенаправлений позволяет задать правило `программа · исходный домен:порт → локальный адрес:порт`. Для TCP sing-box распознаёт домен, заменяет назначение и использует внутренний direct-outbound; UDP/QUIC для той же пары блокируется, чтобы браузер перешёл на TCP. TLS не расшифровывается: сертификат целевого сервиса должен быть действителен для исходного домена.
-
-## Зависимость
-
-Во вкладке **sing-box → Версия sing-box** можно выбрать официальный выпуск для macOS, включая предварительные версии по отдельному переключателю. При первом запуске без установленного движка IP Informer открывает эту вкладку. Кнопка **Проверить** скачивает выпуск, сверяет SHA-256 из официальных метаданных и запускает `sing-box check` на текущем рабочем JSON без изменения службы. Кнопка **Установить** запрашивает стандартное разрешение администратора macOS, переносит проверенный бинарник в системный каталог и подключает службу. Уже установленная через Homebrew версия копируется туда как исходная точка для отката.
-
-Галочка **Автоматически устанавливать новые стабильные версии** включает фоновую проверку в течение пяти минут, затем примерно раз в сутки. Если в конфигурации есть outbound `proxy`, системный обновлятор использует его для загрузки. Он проверяет архив, версию бинарника и конфигурацию до переключения. Если проверка не прошла, текущая версия остаётся активной, а ошибка показывается во вкладке. Выбранная вручную предварительная или более старая версия отключает автообновление. Кнопка **Вернуть предыдущую** восстанавливает сохранённые бинарник и рабочий JSON и выключает автообновление.
-
-Кнопка **Установить патч** включает локальный sing-box 1.14.4-2 после проверки SHA-256 и конфигурации; macOS запросит пароль администратора. Если установлена ревизия 1.14.4-1, кнопка **Обновить патч** переключает её на ревизию 2 за один перезапуск службы. Ревизия 2 распознаёт команды iTerm2 через системный процесс `/usr/bin/login`. Во время работы патча автообновление и переключение официальных версий заблокированы. Кнопка **Вернуть официальный** переключает движок обратно. Патч не устанавливается на VPS. Исходный код закреплён на ревизии `c005f35300ce76427dc285481ec5695f5b179cd2`; сборка и оставшиеся ручные проверки описаны в [TODO.md](TODO.md).
-
-История версий сохраняет дату, SHA-256, официальные заметки каждого промежуточного стабильного выпуска, результат проверки и перечень изменённых путей JSON без значений секретов. История доступна после установки без сети. Бинарники лежат в каталоге `/Library/Application Support/IPInformer/engines`, которым владеет `root`; зашифрованный архив настроек переносит галочку автообновления, но не системные бинарники.
-
-Для ручной установки через Homebrew по-прежнему можно использовать:
+For manual installation:
 
 ```sh
 brew install sing-box
-```
-
-Сгенерированный файл находится по адресу:
-
-```text
-~/Library/Application Support/IPInformer/sing-box.json
-```
-
-Проверка без изменения системной сети:
-
-```sh
 sing-box check -c "$HOME/Library/Application Support/IPInformer/sing-box.json"
 ```
 
-## Системная служба и kill switch
+## System service and PF
 
-Установку следует выполнять только после настройки основной конфигурации, хотя бы одного профиля и проверки из интерфейса:
+The installer configures a LaunchDaemon and PF kill switch after validating the configuration:
 
 ```sh
 cd /path/to/ipinformer
 sudo scripts/install-network-service.sh
 ```
 
-Установщик проверяет конфигурацию до изменения сети, устанавливает LaunchDaemon и постоянный PF kill switch. PF пропускает трафик `lo0` в обоих направлениях без проверки владельца сокета, чтобы локальные сервисы на `127.0.0.1`, включая опубликованные порты Docker Desktop, могли отвечать. PF перенаправляет пользовательский трафик к частным IPv4-адресам в `utun100`, включая адреса локальных подсетей с более приоритетным системным маршрутом. Затем sing-box применяет профиль программы или группы. Физические соединения создаёт sing-box; прямой доступ к локальной сети получают только разрешённые правилами программы. При исчезновении TUN пользовательский трафик остаётся заблокированным. После обновления IP Informer повторно запустите команду установки службы, чтобы обновить PF-правило.
+PF passes `lo0` traffic, including localhost Docker Desktop ports. It redirects user traffic for private IPv4 destinations into `utun100`, even when macOS has a preferred local route. sing-box then applies app and group policy and uses an allowed direct path when appropriate. If TUN disappears, user traffic remains blocked. IP Informer should be the only owner of its TUN; stop another sing-box service before installation. After changing the bundled PF rule, rerun the installer. To apply only the PF anchor without restarting sing-box:
 
-Если нужно применить только изменённое PF-правило без перезапуска sing-box, выполните из каталога проекта:
-
-```bash
+```sh
 sudo install -o root -g wheel -m 644 scripts/service/com.ipinformer.pf /etc/pf.anchors/com.ipinformer
 sudo pfctl -a com.ipinformer -f /etc/pf.anchors/com.ipinformer
 ```
 
-IP Informer должен быть единственным владельцем TUN. Установщик останавливает предыдущую службу IP Informer и откажется продолжать, если обнаружит другой запущенный sing-box. Сначала отключите его Homebrew/LaunchAgent-службу или ручной процесс. Остальные приложения проходят через `utun100` к обычному `direct`/общему маршруту, а специальные outbound применяются только к добавленным программам. Во время запуска или аварии глобальный PF kill switch кратковременно блокирует всю пользовательскую сессию — это исключает утечку управляемой программы.
-
-Аварийное восстановление:
-
-```sh
-sudo ipinformer-recover
-```
-
-Удаление службы:
-
-```sh
-sudo scripts/uninstall-network-service.sh
-```
-
-Supervisor:
-
-1. запускаться как LaunchDaemon до входа пользователя;
-2. проверять конфигурацию командой `sing-box check` перед применением;
-3. держать общий kill switch во время запуска и перезапуска движка;
-4. перезапускать sing-box после сбоя;
-5. иметь отдельную аварийную команду `ipinformer-recover`;
-6. не разрешать программам с назначенным профилем переходить на другой интерфейс.
-
-Важно: изменение `pf` влияет на всю пользовательскую сессию. Сначала сохраните команду восстановления в доступном офлайн месте. DNS и системные процессы macOS могут выполняться от `root`; текущий kill switch гарантирует блокировку сокетов пользовательских приложений, но не является заменой проверенному коммерческому firewall-аудиту.
+The configured public IPv4 probe verifies reachability to its selected IP source. It cannot guarantee reachability to every destination through a particular route.

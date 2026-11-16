@@ -10,6 +10,7 @@ final class SingBoxConfigurationTests: XCTestCase {
         let before = RoutingConfiguration(profiles: [profile], mainConfigurationJSON: mainConfiguration)
         var after = before
         after.applications = [app]
+        after.askUnknownProcesses = true
         after.childCommandChoices = [ChildCommandChoice(applicationID: app.id,
                                                         executablePath: "/usr/bin/ssh",
                                                         route: .outbound("proxy-us"))]
@@ -28,6 +29,8 @@ final class SingBoxConfigurationTests: XCTestCase {
         let prompts = try XCTUnwrap(policy["prompts"] as? [[String: Any]])
         XCTAssertEqual(prompts.count, 1)
         XCTAssertEqual(prompts[0]["exclude_process_paths"] as? [String], ["/usr/bin/ssh"])
+        XCTAssertEqual(policy["ask_unknown_processes"] as? Bool, true)
+        XCTAssertFalse((policy["known_process_path_regex"] as? [String] ?? []).isEmpty)
 
         if let binary = ProcessInfo.processInfo.environment["IPINFORMER_PATCHED_SING_BOX"] {
             let baseURL = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-live-\(UUID()).json")
@@ -216,6 +219,14 @@ final class SingBoxConfigurationTests: XCTestCase {
         var updated = decoded
         updated.allowLocalNetwork = true
         XCTAssertTrue(try JSONDecoder().decode(RoutedApplication.self, from: JSONEncoder().encode(updated)).allowLocalNetwork)
+    }
+
+    func testUnknownProcessPromptDefaultsOffInOlderConfiguration() throws {
+        let configuration = RoutingConfiguration()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(configuration)) as? [String: Any])
+        object.removeValue(forKey: "askUnknownProcesses")
+        let decoded = try JSONDecoder().decode(RoutingConfiguration.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(decoded.askUnknownProcesses)
     }
 
     func testManagedRulesComeBeforeMainConfigurationRules() throws {

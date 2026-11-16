@@ -41,9 +41,18 @@ enum SingBoxConfigurationGenerator {
         }
         let socketPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/IPInformer/child-route.sock").path
+        let knownAppPatterns = configuration.applications.flatMap(processPathPatterns)
+            + (configuration.webKitProxyEnabled ? ["com\\.apple\\.WebKit\\.Networking"] : [])
+        let knownCommandPaths = configuration.commands.flatMap { command -> [String] in
+            let url = URL(fileURLWithPath: command.executablePath).standardizedFileURL
+            return [url.path, url.resolvingSymlinksInPath().path]
+        }
         let policy = try JSONSerialization.data(withJSONObject: ["rules": live.liveRules,
                                                                  "prompts": prompts,
-                                                                 "socket_path": socketPath],
+                                                                 "socket_path": socketPath,
+                                                                 "ask_unknown_processes": configuration.askUnknownProcesses,
+                                                                 "known_process_paths": Array(Set(knownCommandPaths)).sorted(),
+                                                                 "known_process_path_regex": Array(Set(knownAppPatterns)).sorted()],
                                                 options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         return (base, policy)
     }

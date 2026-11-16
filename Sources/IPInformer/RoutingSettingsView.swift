@@ -78,6 +78,13 @@ struct RoutingSettingsView: View {
             Text("Для Telegram Web Apps и встроенных веб-страниц других программ. Сетевой процесс WebKit общий, поэтому это правило действует для всех таких страниц. Остальные программы сохраняют выбранный выше маршрут. Для изменения правила sing-box обновит конфигурацию и активные соединения могут прерваться.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Ask for a route for unlisted processes", isOn: Binding(
+                get: { store.configuration.askUnknownProcesses },
+                set: { store.setAskUnknownProcesses($0) }
+            ))
+            Text("At the first public IPv4 connection of each user process launch, including commands and background processes. The choice applies to that run. Requires the IP Informer sing-box patch; unanswered requests use the default route.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

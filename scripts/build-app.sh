@@ -22,8 +22,10 @@ cp -R "$ROOT_DIR/scripts/service/." "$CONTENTS_DIR/Resources/scripts/service/"
 chmod +x "$CONTENTS_DIR/Resources/scripts/install-patched-engine.sh"
 mkdir -p "$CONTENTS_DIR/Resources/engines"
 /bin/rm -f "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1" \
-    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1.sha256"
-PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2"
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1.sha256" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2.sha256"
+PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3"
 if [[ -n "${IPINFORMER_PATCHED_BINARY:-}" ]]; then
     cp "$IPINFORMER_PATCHED_BINARY" "$PATCH_BINARY"
 else
