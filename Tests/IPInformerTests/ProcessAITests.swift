@@ -77,4 +77,33 @@ final class ProcessAITests: XCTestCase {
         XCTAssertThrowsError(try ProcessAIClient.validateEndpoint("http://example.com/v1/chat/completions", key: nil))
         XCTAssertNoThrow(try ProcessAIClient.validateEndpoint("http://localhost:11434/api/chat", key: nil))
     }
+
+    func testDeepSeekBaseURLsAndMismatchedFormat() throws {
+        let openAI = ProcessAIProfile(name: "DeepSeek", provider: .openAICompatible,
+                                      endpoint: "https://api.deepseek.com", model: "deepseek-flash")
+        let openAIRequest = try ProcessAIClient.makeRequest(
+            processPath: "/usr/bin/curl", parentPath: nil, applicationName: nil,
+            profile: openAI, key: "test-key"
+        )
+        XCTAssertEqual(openAIRequest.url?.path, "/chat/completions")
+
+        let anthropic = ProcessAIProfile(name: "DeepSeek", provider: .anthropic,
+                                         endpoint: "https://api.deepseek.com/anthropic", model: "deepseek-flash")
+        let anthropicRequest = try ProcessAIClient.makeRequest(
+            processPath: "/usr/bin/curl", parentPath: nil, applicationName: nil,
+            profile: anthropic, key: "test-key"
+        )
+        XCTAssertEqual(anthropicRequest.url?.path, "/anthropic/v1/messages")
+
+        var mismatched = openAI
+        mismatched.endpoint = "https://api.deepseek.com/anthropic"
+        XCTAssertThrowsError(try ProcessAIClient.validateProfileEndpoint(mismatched, key: "test-key")) {
+            XCTAssertTrue($0.localizedDescription.contains("Anthropic endpoint"))
+        }
+        mismatched.endpoint = "https://api.deepseek.com/chat/completions"
+        mismatched.model = "deepseek-chat"
+        XCTAssertThrowsError(try ProcessAIClient.validateProfileEndpoint(mismatched, key: "test-key")) {
+            XCTAssertTrue($0.localizedDescription.contains("retired"))
+        }
+    }
 }

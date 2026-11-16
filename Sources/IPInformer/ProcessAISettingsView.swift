@@ -48,6 +48,16 @@ struct ProcessAISettingsView: View {
                 HStack {
                     TextField("Endpoint URL", text: $endpoint)
                     Button("Use default URL") { endpoint = provider.defaultEndpoint }
+                    Menu("Presets") {
+                        Button("DeepSeek · OpenAI-compatible") {
+                            useDeepSeek(provider: .openAICompatible,
+                                        endpoint: "https://api.deepseek.com/chat/completions")
+                        }
+                        Button("DeepSeek · Anthropic-compatible") {
+                            useDeepSeek(provider: .anthropic,
+                                        endpoint: "https://api.deepseek.com/anthropic/v1/messages")
+                        }
+                    }
                 }
                 TextField("Model ID", text: $model)
                 SecureField("API key (leave blank to keep saved key)", text: $key)
@@ -65,9 +75,12 @@ struct ProcessAISettingsView: View {
                 HStack {
                     Button("Save model") { save() }
                     Button("Test model") { test() }
-                        .disabled(isTesting || !settings.profiles.contains(where: { $0.id == editingID }))
+                        .disabled(isTesting)
                     if isTesting { ProgressView().controlSize(.small) }
                 }
+                Text("Test uses the fields currently shown. Save the model to use it from route prompt windows.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if !message.isEmpty {
                     Text(message)
                         .font(.caption)
@@ -116,15 +129,25 @@ struct ProcessAISettingsView: View {
         }
     }
 
+    private func useDeepSeek(provider selectedProvider: ProcessAIProvider, endpoint selectedEndpoint: String) {
+        if name.isEmpty { name = "DeepSeek" }
+        provider = selectedProvider
+        endpoint = selectedEndpoint
+        model = "deepseek-flash"
+        message = "Preset filled. Test the current fields, then save the model."
+    }
+
     private func test() {
-        guard let profile = settings.profiles.first(where: { $0.id == editingID }) else { return }
+        let profile = ProcessAIProfile(id: editingID, name: name.isEmpty ? "Test" : name,
+                                       provider: provider, endpoint: endpoint, model: model)
         isTesting = true
-        message = "Asking \(profile.name)…"
+        message = "Testing the current fields…"
         Task {
             do {
                 let response = try await ProcessAIClient.explain(
                     processPath: "/usr/bin/curl", parentPath: "/bin/zsh",
-                    applicationName: "Model test", profile: profile
+                    applicationName: "Model test", profile: profile,
+                    apiKey: key.isEmpty ? nil : key
                 )
                 message = "Connected. \(response)"
             } catch {

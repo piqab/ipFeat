@@ -26,7 +26,7 @@ The **Terminal commands** section assigns exact executable paths such as `/usr/b
 
 The local sing-box patch is pinned to `1.14.4-4`. It reloads app and command policy without restarting the TUN, attributes child traffic through verified parent processes, and provides the route prompts. Installing the patch needs macOS administrator authorization. While it is active, automatic engine updates are disabled; the app can restore the saved official engine. The VPS always uses official sing-box.
 
-The **AI** tab stores multiple model profiles: OpenAI-compatible endpoints, local Ollama, Anthropic and Gemini. Select one active profile for the `?` button in a route prompt. The button sends only the shown executable and immediate parent paths and registered app name, and asks for an explanation; AI never chooses a route. API keys are stored in Keychain and included only in the password-encrypted configuration export. The route window remains open while a model works. Remote endpoints require HTTPS; local loopback endpoints may use HTTP.
+The **AI** tab stores multiple model profiles: OpenAI-compatible endpoints, local Ollama, Anthropic and Gemini. DeepSeek presets fill the matching endpoint and current model name. **Test model** uses the fields currently shown; **Save model** makes them available to the `?` button in a route prompt. The button sends only the shown executable and immediate parent paths and registered app name, and asks for an explanation; AI never chooses a route. API keys are stored in Keychain and included only in the password-encrypted configuration export. The route window remains open while a model works. Remote endpoints require HTTPS; local loopback endpoints may use HTTP.
 
 ## Client and server configurations
 

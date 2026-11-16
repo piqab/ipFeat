@@ -67,7 +67,7 @@ final class ProcessAISettings: ObservableObject {
         guard !trimmed.name.isEmpty, !trimmed.model.isEmpty else {
             throw ProcessAIError.invalidSettings("Enter a profile name and model.")
         }
-        try ProcessAIClient.validateEndpoint(trimmed.endpoint, key: key ?? ProcessAIKeychain.load(id: profile.id))
+        try ProcessAIClient.validateProfileEndpoint(trimmed, key: key ?? ProcessAIKeychain.load(id: profile.id))
         if let key, !key.isEmpty { try ProcessAIKeychain.save(key, id: profile.id) }
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = trimmed
@@ -200,6 +200,42 @@ enum ProcessAIClient {
         }
     }
 
+    static func validateProfileEndpoint(_ profile: ProcessAIProfile, key: String?) throws {
+        _ = try resolvedURL(for: profile, key: key)
+    }
+
+    private static func resolvedURL(for profile: ProcessAIProfile, key: String?) throws -> URL {
+        try validateEndpoint(profile.endpoint, key: key)
+        var url = URL(string: profile.endpoint)!
+        let host = url.host?.lowercased() ?? ""
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if host == "api.deepseek.com" {
+            if profile.provider == .openAICompatible && path.hasPrefix("anthropic") {
+                throw ProcessAIError.invalidSettings("This is DeepSeek's Anthropic endpoint. For OpenAI-compatible, use https://api.deepseek.com/chat/completions; or select Anthropic and use https://api.deepseek.com/anthropic/v1/messages.")
+            }
+            if profile.model == "deepseek-chat" || profile.model == "deepseek-reasoner" {
+                throw ProcessAIError.invalidSettings("DeepSeek retired this model name. Use deepseek-flash or deepseek-v4-pro.")
+            }
+        }
+        switch profile.provider {
+        case .openAICompatible:
+            if path.isEmpty {
+                url.appendPathComponent(host == "api.deepseek.com" ? "chat/completions" : "v1/chat/completions")
+            } else if path == "v1" {
+                url.appendPathComponent("chat/completions")
+            }
+        case .ollama:
+            if path.isEmpty { url.appendPathComponent("api/chat") }
+        case .anthropic:
+            if path.isEmpty || path == "anthropic" || path == "v1" {
+                url.appendPathComponent(path == "v1" ? "messages" : "v1/messages")
+            }
+        case .gemini:
+            break
+        }
+        return url
+    }
+
     static func explain(processPath: String, parentPath: String?, applicationName: String?,
                         profile: ProcessAIProfile, apiKey: String? = nil,
                         session: URLSession = .shared) async throws -> String {
@@ -240,13 +276,12 @@ enum ProcessAIClient {
 
     static func makeRequest(processPath: String, parentPath: String?, applicationName: String?,
                             profile: ProcessAIProfile, key: String?) throws -> URLRequest {
-        try validateEndpoint(profile.endpoint, key: key)
+        var url = try resolvedURL(for: profile, key: key)
         guard !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProcessAIError.invalidSettings("Select a model in Settings → AI.")
         }
         let instruction = "Explain what a macOS process may be based only on the supplied paths. State uncertainty clearly. Explain a possible relationship to its parent. Do not claim that it is safe or unsafe and do not choose a network route. Be concise."
         let context = "Executable: \(processPath)\nImmediate parent: \(parentPath ?? "unknown")\nRegistered application: \(applicationName ?? "none")"
-        var url = URL(string: profile.endpoint)!
         var body: [String: Any]
         switch profile.provider {
         case .openAICompatible, .ollama:
