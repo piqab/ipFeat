@@ -25,7 +25,9 @@ mkdir -p "$CONTENTS_DIR/Resources/engines"
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1.sha256" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2.sha256"
-PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3"
+/bin/rm -f "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3.sha256"
+PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-4"
 if [[ -n "${IPINFORMER_PATCHED_BINARY:-}" ]]; then
     cp "$IPINFORMER_PATCHED_BINARY" "$PATCH_BINARY"
 else

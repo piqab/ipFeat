@@ -8,13 +8,13 @@
 		<data>
 		xVM3fy/HH2jMwKcX3JCVPWjs3XA=
 		</data>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-3</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-4</key>
 		<data>
-		R0vH/FyiiLG6sJdkj1R2RVDJ11s=
+		q+1CCd8JSU0BwPT4MgE6V9MCTAM=
 		</data>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-3.sha256</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-4.sha256</key>
 		<data>
-		fNhHorsfrlLxaraM1fVHiOjr13E=
+		cznQnG5hHVBhDFLfazqRd8iTDXM=
 		</data>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<data>
@@ -22,7 +22,7 @@
 		</data>
 		<key>Resources/scripts/install-patched-engine.sh</key>
 		<data>
-		DzbJYXs5agI1GK4Z4F3ay3QsKxo=
+		7JnK9MVQBy5DCgnJa+lcxh/SMJs=
 		</data>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>
 		<data>
@@ -63,18 +63,18 @@
 			/cakepdozAZEwB4kgFxYIWzpP2G+cyLt0VEO3j1D6VU=
 			</data>
 		</dict>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-3</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-4</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			bdzOyvUkRg+6nd2Ib0xki8EQyaY+MH1SWnL3xQBk18A=
+			gcJ6bBaobMWDGXiZJXR3qyufAFW+qbppTEYd3hQJUVY=
 			</data>
 		</dict>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-3.sha256</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-4.sha256</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			mZCy3I0N3laCR1+EdFfED/HVgwXDo7s4aAU+EAmRbEg=
+			eT7hiqKRIwl8LrrUYtMWDIjhEzlxMF61X2EyaoVk+xE=
 			</data>
 		</dict>
 		<key>Resources/scripts/install-network-service.sh</key>
@@ -88,7 +88,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			BO8VTgz1EBVVz1zPtmJOLfAa0Zcxg8JtKMIBr6CsXPo=
+			nb8ulClcCY0cryPdJzzRWH3vEVIUmuoOfeynPCs4v0k=
 			</data>
 		</dict>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>

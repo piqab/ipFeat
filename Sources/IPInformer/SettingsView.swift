@@ -40,6 +40,9 @@ struct SettingsView: View {
             SingBoxSettingsView(store: routingStore, monitor: monitor)
                 .tabItem { Label("sing-box", systemImage: "network.badge.shield.half.filled") }
                 .tag(3)
+            ProcessAISettingsView()
+                .tabItem { Label("AI", systemImage: "questionmark.bubble") }
+                .tag(4)
         }
         .frame(width: 820, height: 620)
         .onReceive(monitor.$sources) { _ in selectedInterval = monitor.interval }

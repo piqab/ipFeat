@@ -141,15 +141,15 @@ struct SingBoxSettingsView: View {
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.isPatched && engine.activePatchRevision != 3
-                     ? "Patch 1.14.4-3 adds timely prompts and optional routing for unlisted processes."
+                Text(engine.isPatched && engine.activePatchRevision != 4
+                     ? "Patch 1.14.4-4 keeps route prompts open and blocks a timed-out first connection."
                      : engine.isPatched
-                       ? "Patch 1.14.4-3 active · application rules update without disconnecting existing connections."
-                       : "Patch 1.14.4-3 adds live rules and route prompts for child and unlisted processes.")
+                       ? "Patch 1.14.4-4 active · route prompts stay open until you choose."
+                       : "Patch 1.14.4-4 adds live rules and persistent route prompts.")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
-                    if engine.activePatchRevision != 3 {
+                    if engine.activePatchRevision != 4 {
                         Button("Update patch") { Task { await engine.installPatch() } }
                             .disabled(engine.isInstalling)
                     }
@@ -487,7 +487,8 @@ struct SingBoxSettingsView: View {
             launchAtLogin: SMAppService.mainApp.status == .enabled,
             configurationHistory: store.configurationHistory,
             engineAutoInstall: engine.autoInstall,
-            serverConfigurations: ServerSecretStore.all(for: store.configuration.clientConnections)
+            serverConfigurations: ServerSecretStore.all(for: store.configuration.clientConnections),
+            processAISettings: ProcessAISettings.shared.snapshot()
         )
         do {
             let encrypted = try ConfigurationArchive.encrypt(backup, password: password)
@@ -515,6 +516,9 @@ struct SingBoxSettingsView: View {
                 if let uuid = UUID(uuidString: id) {
                     try ServerSecretStore.save(serverConfig, id: uuid)
                 }
+            }
+            if let aiSettings = pendingBackup.processAISettings {
+                try ProcessAISettings.shared.restore(aiSettings)
             }
             let defaults = UserDefaults.standard
             defaults.set(pendingBackup.widgetsVisible, forKey: "widgetsVisible")

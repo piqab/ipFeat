@@ -13,6 +13,7 @@ struct ConfigurationBackup: Codable {
     var configurationHistory: [ConfigurationRevision]
     var engineAutoInstall: Bool? = nil
     var serverConfigurations: [String: String]? = nil
+    var processAISettings: ProcessAISettingsSnapshot? = nil
 }
 
 private struct EncryptedBackup: Codable {

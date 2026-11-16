@@ -17,19 +17,13 @@ final class ChildRoutePromptServer {
     private struct Reply: Encodable {
         let id: String
         let route: String
-    }
-
-    private struct PendingPrompt {
-        let request: Request
-        let deadline: DispatchTime
-        let complete: (String) -> Void
+        let use_default: Bool
     }
 
     private let store: RoutingStore
     private let path: String
     private let queue = DispatchQueue(label: "local.ipinformer.child-route")
-    private var pendingPrompts: [PendingPrompt] = []
-    private var isShowingPrompt = false
+    private var activePanels: [UUID: RoutePromptPanel] = [:]
     private var source: DispatchSourceRead?
 
     init(store: RoutingStore) {
@@ -77,8 +71,8 @@ final class ChildRoutePromptServer {
                 Darwin.close(client)
                 return
             }
-            // Each connection has its own deadline. An open alert must not
-            // block accepting and reading the next request from sing-box.
+            // A route panel may stay open indefinitely. Accept each client
+            // independently so one decision cannot delay another prompt.
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 self?.handle(client)
             }
@@ -91,11 +85,16 @@ final class ChildRoutePromptServer {
     func stop() {
         source?.cancel()
         source = nil
+        for panel in Array(activePanels.values) { panel.dismiss() }
         try? FileManager.default.removeItem(atPath: path)
     }
 
     nonisolated private func handle(_ fd: Int32) {
         defer { Darwin.close(fd) }
+        var noSIGPIPE: Int32 = 1
+        _ = withUnsafePointer(to: &noSIGPIPE) { pointer in
+            Darwin.setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, pointer, socklen_t(MemoryLayout<Int32>.size))
+        }
         var timeout = timeval(tv_sec: 20, tv_usec: 0)
         _ = withUnsafePointer(to: &timeout) { pointer in
             Darwin.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, pointer, socklen_t(MemoryLayout<timeval>.size))
@@ -109,40 +108,26 @@ final class ChildRoutePromptServer {
             if input.contains(0x0a) { break }
         }
         guard let request = try? JSONDecoder().decode(Request.self, from: input) else { return }
-        let deadline = DispatchTime.now() + .seconds(18)
         let semaphore = DispatchSemaphore(value: 0)
-        var route = ""
+        var route = "reject"
         DispatchQueue.main.async { [weak self] in
             guard let self else { semaphore.signal(); return }
-            self.pendingPrompts.append(PendingPrompt(request: request, deadline: deadline) { selected in
+            self.presentPrompt(request) { selected in
                 route = selected
                 semaphore.signal()
-            })
-            self.showNextPrompt()
+            }
         }
-        guard semaphore.wait(timeout: deadline) == .success else { return }
-        guard let data = try? JSONEncoder().encode(Reply(id: request.id, route: route)) else { return }
+        semaphore.wait()
+        let useDefault = route == "\u{0}policy"
+        guard let data = try? JSONEncoder().encode(Reply(id: request.id, route: useDefault ? "" : route,
+                                                         use_default: useDefault)) else { return }
         var reply = data
         reply.append(0x0a)
         _ = reply.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
 
-    private func showNextPrompt() {
-        guard !isShowingPrompt else { return }
-        isShowingPrompt = true
-        defer { isShowingPrompt = false }
-        while !pendingPrompts.isEmpty {
-            let pending = pendingPrompts.removeFirst()
-            let route = DispatchTime.now() < pending.deadline
-                ? chooseRoute(for: pending.request, deadline: pending.deadline) : ""
-            pending.complete(route)
-        }
-    }
-
-    private func chooseRoute(for request: Request, deadline: DispatchTime) -> String {
-        let now = DispatchTime.now()
-        guard now < deadline else { return "" }
-        guard !request.command_path.isEmpty else { return "" }
+    private func presentPrompt(_ request: Request, complete: @escaping (String) -> Void) {
+        guard !request.command_path.isEmpty else { complete("reject"); return }
         let isUnknown = request.kind == "unknown"
         let appID = request.application_id.flatMap(UUID.init(uuidString:))
         let application = appID.flatMap { id in
@@ -150,46 +135,48 @@ final class ChildRoutePromptServer {
                 $0.id == id && $0.enabled && $0.askChildCommands
             })
         }
-        guard isUnknown ? store.configuration.askUnknownProcesses : application != nil else { return "" }
+        guard isUnknown ? store.configuration.askUnknownProcesses : application != nil else {
+            complete("reject")
+            return
+        }
         let processName = URL(fileURLWithPath: request.command_path).lastPathComponent
         let parentName = request.parent_path.map { URL(fileURLWithPath: $0).lastPathComponent }
-        let alert = NSAlert()
-        alert.messageText = isUnknown ? "Route for an unlisted process" : "Child command route"
-        alert.informativeText = isUnknown
-            ? "\(processName) opened a public IPv4 connection. Choose a route for this run.\n\(request.command_path)"
+        let title = isUnknown ? "Route for an unlisted process" : "Child command route"
+        let detail = isUnknown
+            ? "\(processName) opened a public IPv4 connection. Choose a route for this run."
             : "\(processName) opened a public IPv4 connection from \(application?.name ?? request.application_name ?? "an application")\(parentName.map { " through \($0)" } ?? ""). Choose its route."
-        let options = store.outboundTags.map { (label: $0, route: DefaultRoute.outbound($0)) }
+        let options = store.outboundTags.map { RoutePromptOption(label: $0, route: .outbound($0)) }
             + (isUnknown
-                ? [(label: "Block public internet", route: DefaultRoute.block)]
-                : [(label: "No network", route: DefaultRoute.block),
-                   (label: "This Mac only", route: DefaultRoute.localOnly)])
-        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
-        options.forEach { picker.addItem(withTitle: $0.label) }
-        alert.accessoryView = picker
-        alert.addButton(withTitle: isUnknown ? "Use for this run" : "Remember route")
-        alert.addButton(withTitle: isUnknown ? "Use default route" : "Use application route")
-        NSApp.activate(ignoringOtherApps: true)
-        let beforeDisplay = DispatchTime.now()
-        guard beforeDisplay < deadline else { return "" }
-        let remaining = Double(deadline.uptimeNanoseconds - beforeDisplay.uptimeNanoseconds) / 1_000_000_000
-        let expiry = Timer(timeInterval: remaining, repeats: false) { [weak alert] _ in
-            guard let alert, NSApp.modalWindow === alert.window else { return }
-            NSApp.abortModal()
+                ? [RoutePromptOption(label: "Block public internet", route: .block)]
+                : [RoutePromptOption(label: "No network", route: .block),
+                   RoutePromptOption(label: "This Mac only", route: .localOnly)])
+        let id = UUID()
+        let panel = RoutePromptPanel(
+            title: title, detail: detail, processPath: request.command_path,
+            parentPath: request.parent_path, applicationName: application?.name ?? request.application_name,
+            isUnknown: isUnknown, options: options, offset: activePanels.count
+        ) { [weak self] decision in
+            guard let self else { complete("reject"); return }
+            if case .selected(let selected) = decision, !isUnknown, let appID {
+                self.store.saveChildCommandChoice(applicationID: appID,
+                                                   executablePath: request.command_path, route: selected)
+            }
+            self.activePanels.removeValue(forKey: id)
+            complete(Self.routeString(for: decision))
         }
-        RunLoop.main.add(expiry, forMode: .modalPanel)
-        let response = alert.runModal()
-        expiry.invalidate()
-        alert.window.orderOut(nil)
-        guard response == .alertFirstButtonReturn,
-              DispatchTime.now() < deadline,
-              options.indices.contains(picker.indexOfSelectedItem) else { return "" }
-        let selected = options[picker.indexOfSelectedItem].route
-        if !isUnknown, let appID {
-            store.saveChildCommandChoice(applicationID: appID, executablePath: request.command_path, route: selected)
-        }
-        switch selected {
-        case .outbound(let tag): return tag
-        case .localOnly, .block: return "reject"
+        activePanels[id] = panel
+        panel.show()
+    }
+
+    private static func routeString(for decision: RoutePromptDecision) -> String {
+        switch decision {
+        case .ordinaryPolicy: return "\u{0}policy"
+        case .blocked: return "reject"
+        case .selected(let route):
+            switch route {
+            case .outbound(let tag): return tag
+            case .localOnly, .block: return "reject"
+            }
         }
     }
 }

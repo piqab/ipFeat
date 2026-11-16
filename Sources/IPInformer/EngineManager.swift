@@ -55,6 +55,7 @@ enum LocalSingBoxPatch {
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: currentPath)) != nil,
               FileManager.default.isExecutableFile(atPath: currentPath) else { return nil }
         let target = URL(fileURLWithPath: currentPath).resolvingSymlinksInPath().path
+        if target == "\(engineDirectory)/1.14.4-ipinformer-4/sing-box" { return 4 }
         if target == "\(engineDirectory)/1.14.4-ipinformer-3/sing-box" { return 3 }
         if target == "\(engineDirectory)/1.14.4-ipinformer-2/sing-box" { return 2 }
         if target == "\(engineDirectory)/1.14.4-ipinformer-1/sing-box" { return 1 }
@@ -268,7 +269,7 @@ final class EngineManager: ObservableObject {
     }
 
     func installPatch() async {
-        guard !isInstalling, activePatchRevision != 3 else { return }
+        guard !isInstalling, activePatchRevision != 4 else { return }
         autoInstall = false
         await switchPatch(mode: "--install")
     }
@@ -292,7 +293,7 @@ final class EngineManager: ObservableObject {
         }.value
         isInstalling = false
         refreshLocalState()
-        message = result.success ? (mode == "--install" ? "IP Informer sing-box patch 1.14.4-3 installed" : "Official sing-box restored")
+        message = result.success ? (mode == "--install" ? "IP Informer sing-box patch 1.14.4-4 installed" : "Official sing-box restored")
             : (result.output.isEmpty ? "Операция отменена или завершилась ошибкой" : result.output)
     }
 

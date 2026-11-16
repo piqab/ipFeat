@@ -82,7 +82,7 @@ struct RoutingSettingsView: View {
                 get: { store.configuration.askUnknownProcesses },
                 set: { store.setAskUnknownProcesses($0) }
             ))
-            Text("At the first public IPv4 connection of each user process launch, including commands and background processes. The choice applies to that run. Requires the IP Informer sing-box patch; unanswered requests use the default route.")
+            Text("At the first public IPv4 connection of each user process launch, including commands and background processes. The choice applies to that run. Requires patch 1.14.4-4. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

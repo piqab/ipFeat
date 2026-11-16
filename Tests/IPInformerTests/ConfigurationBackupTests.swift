@@ -99,6 +99,8 @@ final class ConfigurationBackupTests: XCTestCase {
                                           serverIPv4: "203.0.113.10", protocolName: "vless",
                                           singBoxVersion: "1.12.0")
         routing.clientConnections = [connection]
+        let aiProfile = ProcessAIProfile(name: "Local model", provider: .ollama,
+                                         endpoint: "http://127.0.0.1:11434/api/chat", model: "test-model")
         let backup = ConfigurationBackup(
             routing: routing,
             sources: IPSource.defaults, checkInterval: 15,
@@ -106,11 +108,15 @@ final class ConfigurationBackupTests: XCTestCase {
             launchAtLogin: true,
             configurationHistory: [ConfigurationRevision(date: Date(timeIntervalSince1970: 1), json: "{\"secret\":\"sample\"}")],
             engineAutoInstall: true,
-            serverConfigurations: [connection.id.uuidString: "{\"private_key\":\"secret\"}"]
+            serverConfigurations: [connection.id.uuidString: "{\"private_key\":\"secret\"}"],
+            processAISettings: ProcessAISettingsSnapshot(
+                profiles: [aiProfile], selectedProfileID: aiProfile.id,
+                keys: [aiProfile.id.uuidString: "ai-test-secret"])
         )
         let encrypted = try ConfigurationArchive.encrypt(backup, password: "correct horse battery staple")
         XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("sample"))
         XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("private_key"))
+        XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("ai-test-secret"))
         let decoded = try ConfigurationArchive.decrypt(encrypted, password: "correct horse battery staple")
         XCTAssertEqual(decoded.routing.defaultRoute, .outbound("proxy"))
         XCTAssertEqual(decoded.sources.count, backup.sources.count)
@@ -120,6 +126,8 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertEqual(decoded.routing.clientConnections, [connection])
         XCTAssertEqual(decoded.routing.commands, routing.commands)
         XCTAssertEqual(decoded.serverConfigurations, backup.serverConfigurations)
+        XCTAssertEqual(decoded.processAISettings?.profiles, [aiProfile])
+        XCTAssertEqual(decoded.processAISettings?.keys[aiProfile.id.uuidString], "ai-test-secret")
         XCTAssertThrowsError(try ConfigurationArchive.decrypt(encrypted, password: "wrong password"))
 
         var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encrypted) as? [String: Any])
