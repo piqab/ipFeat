@@ -58,6 +58,7 @@ struct RoutingProfile: Identifiable, Codable, Equatable, Sendable {
     static let localNetwork = RoutingProfile(id: UUID(uuidString: "8BB858BB-93AB-4D83-B325-26D45EF0B003")!, name: "Локальная сеть", kind: .localNetwork)
 
     var isBuiltIn: Bool { kind != .outbound }
+    var displayName: String { isBuiltIn ? AppLanguage.localized(name) : name }
 }
 
 struct RoutingGroup: Identifiable, Codable, Equatable, Sendable {
@@ -156,6 +157,34 @@ struct ChildCommandChoice: Identifiable, Codable, Equatable, Sendable {
     var route: DefaultRoute
 }
 
+struct SavedProcessRoute: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var executablePath: String
+    var route: DefaultRoute
+    var groupID: UUID? = nil
+    var enabled = true
+
+    private enum CodingKeys: String, CodingKey { case id, executablePath, route, groupID, enabled }
+
+    init(id: UUID = UUID(), executablePath: String, route: DefaultRoute,
+         groupID: UUID? = nil, enabled: Bool = true) {
+        self.id = id
+        self.executablePath = executablePath
+        self.route = route
+        self.groupID = groupID
+        self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        executablePath = try values.decode(String.self, forKey: .executablePath)
+        route = try values.decode(DefaultRoute.self, forKey: .route)
+        groupID = try values.decodeIfPresent(UUID.self, forKey: .groupID)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
+}
+
 struct RoutedCommand: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var name: String
@@ -185,27 +214,65 @@ struct ApplicationRedirect: Identifiable, Codable, Equatable, Sendable {
     var enabled: Bool
 }
 
+struct DomainRouteRule: Identifiable, Codable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var pattern: String
+    var outboundTag: String
+    var enabled = true
+
+    var normalizedPattern: String {
+        let value = pattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value.hasSuffix(".") ? String(value.dropLast()) : value
+    }
+
+    func matchFields() throws -> [String: Any] {
+        let value = normalizedPattern
+        let wildcard = value.hasPrefix("*.")
+        let name = wildcard ? String(value.dropFirst(2)) : value
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard !name.isEmpty, labels.allSatisfy({ label in
+            !label.isEmpty && label.count <= 63 && !label.hasPrefix("-") && !label.hasSuffix("-") &&
+            label.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
+        }), name.count <= 253, !name.contains("*") else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Invalid domain pattern: \(pattern)")
+        }
+        return wildcard ? ["domain_suffix": ["." + name]] : ["domain": [name]]
+    }
+}
+
 struct RoutingConfiguration: Codable, Equatable, Sendable {
     var profiles: [RoutingProfile] = []
     var groups: [RoutingGroup] = []
     var applications: [RoutedApplication] = []
     var commands: [RoutedCommand] = []
     var childCommandChoices: [ChildCommandChoice] = []
+    var savedProcessRoutes: [SavedProcessRoute] = []
     var singBoxAlwaysOn = true
     var serviceStartsAtBoot = true
     var globalStartupKillSwitch = true
     var mainConfigurationJSON = Self.defaultMainConfigurationJSON
     var defaultRoute: DefaultRoute?
+    var webKitProfileID: UUID?
+    // Decoding old settings: an enabled switch means the profile using `proxy`.
     var webKitProxyEnabled = false
     var askUnknownProcesses = false
     var selfProxySeeded = false
     var redirects: [ApplicationRedirect] = []
+    var domainRules: [DomainRouteRule] = []
     var clientConnections: [ClientConnection] = []
+    var usesManagedServerConfiguration = true
+
+    func outboundDisplayName(for tag: String) -> String {
+        let matching = profiles.filter { $0.kind == .outbound && $0.outboundTag == tag }
+        let preferred = matching.first { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name != tag }
+            ?? matching.first { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return preferred?.displayName ?? tag
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case profiles, groups, applications, commands, childCommandChoices, singBoxAlwaysOn, serviceStartsAtBoot
-        case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProxyEnabled, askUnknownProcesses
-        case selfProxySeeded, redirects, clientConnections
+        case profiles, groups, applications, commands, childCommandChoices, savedProcessRoutes, singBoxAlwaysOn, serviceStartsAtBoot
+        case globalStartupKillSwitch, mainConfigurationJSON, defaultRoute, webKitProfileID, webKitProxyEnabled, askUnknownProcesses
+        case selfProxySeeded, redirects, domainRules, clientConnections, usesManagedServerConfiguration
     }
 
     init(
@@ -219,6 +286,7 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         mainConfigurationJSON: String = Self.defaultMainConfigurationJSON,
         redirects: [ApplicationRedirect] = [],
         defaultRoute: DefaultRoute? = nil,
+        webKitProfileID: UUID? = nil,
         webKitProxyEnabled: Bool = false,
         askUnknownProcesses: Bool = false
     ) {
@@ -230,7 +298,9 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         self.serviceStartsAtBoot = serviceStartsAtBoot
         self.globalStartupKillSwitch = globalStartupKillSwitch
         self.mainConfigurationJSON = mainConfigurationJSON
+        self.usesManagedServerConfiguration = mainConfigurationJSON == Self.defaultMainConfigurationJSON
         self.defaultRoute = defaultRoute
+        self.webKitProfileID = webKitProfileID
         self.webKitProxyEnabled = webKitProxyEnabled
         self.askUnknownProcesses = askUnknownProcesses
         self.redirects = redirects
@@ -243,17 +313,21 @@ struct RoutingConfiguration: Codable, Equatable, Sendable {
         applications = try values.decodeIfPresent([RoutedApplication].self, forKey: .applications) ?? []
         commands = try values.decodeIfPresent([RoutedCommand].self, forKey: .commands) ?? []
         childCommandChoices = try values.decodeIfPresent([ChildCommandChoice].self, forKey: .childCommandChoices) ?? []
+        savedProcessRoutes = try values.decodeIfPresent([SavedProcessRoute].self, forKey: .savedProcessRoutes) ?? []
         singBoxAlwaysOn = try values.decodeIfPresent(Bool.self, forKey: .singBoxAlwaysOn) ?? true
         serviceStartsAtBoot = try values.decodeIfPresent(Bool.self, forKey: .serviceStartsAtBoot) ?? true
         globalStartupKillSwitch = try values.decodeIfPresent(Bool.self, forKey: .globalStartupKillSwitch) ?? true
         mainConfigurationJSON = try values.decodeIfPresent(String.self, forKey: .mainConfigurationJSON)
             ?? Self.defaultMainConfigurationJSON
         defaultRoute = try values.decodeIfPresent(DefaultRoute.self, forKey: .defaultRoute)
+        webKitProfileID = try values.decodeIfPresent(UUID.self, forKey: .webKitProfileID)
         webKitProxyEnabled = try values.decodeIfPresent(Bool.self, forKey: .webKitProxyEnabled) ?? false
         askUnknownProcesses = try values.decodeIfPresent(Bool.self, forKey: .askUnknownProcesses) ?? false
         selfProxySeeded = try values.decodeIfPresent(Bool.self, forKey: .selfProxySeeded) ?? false
         redirects = try values.decodeIfPresent([ApplicationRedirect].self, forKey: .redirects) ?? []
+        domainRules = try values.decodeIfPresent([DomainRouteRule].self, forKey: .domainRules) ?? []
         clientConnections = try values.decodeIfPresent([ClientConnection].self, forKey: .clientConnections) ?? []
+        usesManagedServerConfiguration = try values.decodeIfPresent(Bool.self, forKey: .usesManagedServerConfiguration) ?? false
     }
 
     static let defaultMainConfigurationJSON = """
@@ -297,6 +371,11 @@ struct ClientConnection: Codable, Identifiable, Equatable, Sendable {
     var protocolName: String
     var singBoxVersion: String
     var createdAt = Date()
+    var outboundJSON: String? = nil
+    var serverArchitecture: String? = nil
+    var serverSSHPort: Int? = nil
+    var installationVerified: Bool? = nil
+    var installationCheckedAt: Date? = nil
 }
 
 struct ConfigurationRevision: Codable, Identifiable, Equatable, Sendable {
@@ -313,14 +392,6 @@ struct NetworkInterfaceOption: Identifiable, Hashable, Sendable {
 
     var id: String { name }
     var title: String { "\(displayName) (\(name))" }
-}
-
-struct RouteProbeEndpoint: Identifiable, Equatable, Sendable {
-    let outboundTag: String
-    let inboundTag: String
-    let port: Int
-
-    var id: String { outboundTag }
 }
 
 enum RoutingConfigurationError: LocalizedError, Equatable {

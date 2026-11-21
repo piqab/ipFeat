@@ -7,24 +7,16 @@ struct MenuBarPopoverView: View {
     private static let visibleIconWidth: CGFloat = 5 * iconWidth + 4 * iconSpacing
 
     @ObservedObject var store: RoutingStore
-    @State private var widgetsVisible: Bool
     @State private var scrollOffsetsByRow: [String: CGFloat] = [:]
-    let checkNow: () -> Void
-    let toggleWidgets: () -> Void
     let openSettings: () -> Void
     let addApplications: (UUID?) -> Void
     let quit: () -> Void
     let close: () -> Void
 
-    init(store: RoutingStore, widgetsVisible: Bool,
-         checkNow: @escaping () -> Void, toggleWidgets: @escaping () -> Void,
-         openSettings: @escaping () -> Void, addApplications: @escaping (UUID?) -> Void,
+    init(store: RoutingStore, openSettings: @escaping () -> Void, addApplications: @escaping (UUID?) -> Void,
          quit: @escaping () -> Void,
          close: @escaping () -> Void) {
         self.store = store
-        _widgetsVisible = State(initialValue: widgetsVisible)
-        self.checkNow = checkNow
-        self.toggleWidgets = toggleWidgets
         self.openSettings = openSettings
         self.addApplications = addApplications
         self.quit = quit
@@ -74,15 +66,6 @@ struct MenuBarPopoverView: View {
                 Divider().padding(.vertical, 8)
             }
 
-            actionRow("Проверить сейчас", systemImage: "arrow.clockwise") {
-                checkNow()
-                close()
-            }
-            actionRow(widgetsVisible ? "Скрыть виджеты" : "Показать виджеты",
-                      systemImage: widgetsVisible ? "eye.slash" : "eye") {
-                toggleWidgets()
-                widgetsVisible.toggle()
-            }
             actionRow("Настройки…", systemImage: "gearshape") {
                 close()
                 openSettings()
@@ -98,7 +81,7 @@ struct MenuBarPopoverView: View {
     }
 
     static func preferredHeight(rowCount: Int) -> CGFloat {
-        164 + (rowCount == 0 ? 0 : CGFloat(min(rowCount, 6)) * 48 + 17)
+        96 + (rowCount == 0 ? 0 : CGFloat(min(rowCount, 6)) * 48 + 17)
     }
 
     private func applicationRow(_ row: AppRow) -> some View {

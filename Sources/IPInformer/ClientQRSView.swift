@@ -5,6 +5,7 @@ import SwiftUI
 struct ClientQRSView: View {
     let connection: ClientConnection
     let mainJSON: String
+    let domainRules: [DomainRouteRule]
 
     @Environment(\.dismiss) private var dismiss
     @State private var frames: [String] = []
@@ -84,7 +85,8 @@ struct ClientQRSView: View {
 
     private func prepare() {
         do {
-            let config = try ClientQRS.androidConfiguration(connection: connection, mainJSON: mainJSON)
+            let config = try ClientQRS.androidConfiguration(connection: connection, mainJSON: mainJSON,
+                                                             domainRules: domainRules)
             let profile = try ClientQRS.profileData(name: connection.name, config: config)
             frames = try ClientQRS.frames(profileData: profile)
             currentImage = try Self.makeQR(frames[0])

@@ -4,9 +4,11 @@ import SwiftUI
 struct IPInformerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() { AppLanguage.applyAtLaunch() }
+
     var body: some Scene {
         Settings {
-            SettingsView(monitor: appDelegate.monitor, routingStore: appDelegate.routingStore)
+            SettingsView(routingStore: appDelegate.routingStore)
         }
     }
 }

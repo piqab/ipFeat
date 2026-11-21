@@ -33,6 +33,9 @@ struct NewServerWizardView: View {
     @State private var isDeploying = false
     @State private var showDeploymentLog = false
     @State private var validated = false
+    @State private var manualArchitecture = "amd64"
+    @State private var pendingInstallation: PendingServerInstallation?
+    @State private var manualResult = ""
 
     private var selectedOption: ServerProtocolOption? { options.first { $0.id == protocolID } }
     private var binary: String? { NewServerConfiguration.availableBinary() }
@@ -142,10 +145,14 @@ struct NewServerWizardView: View {
                         .onChange(of: serverJSON) { _ in validated = false }
                         .onChange(of: clientJSON) { _ in validated = false }
                     }
+                    if validated { manualInstallationSection }
                 }
             }
             .disabled(isDeploying)
-            if !status.isEmpty { Text(status).font(.caption).foregroundStyle(status.hasPrefix("Ошибка") ? .red : .secondary) }
+            if !status.isEmpty {
+                Text(status).font(.caption)
+                    .foregroundStyle(status.hasPrefix("Ошибка") || status.hasPrefix(AppLanguage.localized("Ошибка")) ? .red : .secondary)
+            }
             HStack {
                 Button("Закрыть") { dismiss() }.disabled(isDeploying)
                 if !deploymentLog.text.isEmpty {
@@ -175,13 +182,109 @@ struct NewServerWizardView: View {
                 do { options = try NewServerConfiguration.protocolOptions(binary: binary).filter { $0.kind == .inbound && $0.hasClientOutbound } }
                 catch { status = "Ошибка схемы: \(error.localizedDescription)" }
             }
-            Task { await engine.refreshReleases() }
         }
+    }
+
+    private var manualInstallationSection: some View {
+        GroupBox("Manual VPS installation") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("VPS architecture", selection: $manualArchitecture) {
+                    Text("x86_64 / amd64").tag("amd64")
+                    Text("aarch64 / arm64").tag("arm64")
+                }
+                .frame(maxWidth: 300)
+                Text("Run the copied script as root on the VPS, or export a package for a Mac/Linux host that can connect to the VPS. The host script downloads and verifies the Linux archive before transferring it. The scripts contain server credentials.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Copy server installation script") { copyManualScript() }
+                    Button("Copy host installation script") { copyHostScript() }
+                    Button("Export installation package…") { exportManualPackage() }
+                }
+                TextField("Paste IPINFORMER_INSTALL_OK line after installation", text: $manualResult)
+                    .textFieldStyle(.roundedBorder)
+                Button("Match result and add client") { completeManualInstallation() }
+                    .disabled(manualResult.isEmpty || pendingInstallation == nil)
+            }
+            .padding(6)
+        }
+    }
+
+    private func preparePendingInstallation() throws -> PendingServerInstallation {
+        guard validated, let version = validatedVersion, version == configurationVersion,
+              let binary, try NewServerConfiguration.binaryVersion(binary: binary) == version,
+              let port = Int(sshPort), (1...65535).contains(port),
+              let outbound = try JSONSerialization.jsonObject(with: Data(clientJSON.utf8)) as? [String: Any],
+              let tag = outbound["tag"] as? String,
+              let type = outbound["type"] as? String else {
+            throw NSError(domain: "IPInformer.ManualInstall", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Check both JSON files and the sing-box version again"])
+        }
+        try NewServerConfiguration.validatePairing(serverJSON: serverJSON, outboundJSON: clientJSON,
+                                                   serverIPv4: host, port: Int(servicePort) ?? 0,
+                                                   option: selectedOption)
+        try NewServerConfiguration.validate(serverJSON: serverJSON, outboundJSON: clientJSON, binary: binary)
+        if let pendingInstallation, pendingInstallation.serverJSON == serverJSON,
+           pendingInstallation.clientJSON == clientJSON, pendingInstallation.architecture == manualArchitecture,
+           pendingInstallation.serverIPv4 == host, pendingInstallation.version == version,
+           pendingInstallation.name == name, pendingInstallation.sshPort == port {
+            return pendingInstallation
+        }
+        let pending = PendingServerInstallation(id: UUID(), name: name, serverIPv4: host,
+            sshPort: port, architecture: manualArchitecture, version: version,
+            protocolName: type, outboundTag: tag, clientJSON: clientJSON,
+            serverJSON: serverJSON, createdAt: Date())
+        try PendingServerInstallationStore.save(pending)
+        pendingInstallation = pending
+        return pending
+    }
+
+    private func copyManualScript() {
+        do {
+            let pending = try preparePendingInstallation()
+            let script = try pending.serverScript()
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(script, forType: .string)
+            status = "Server installer copied. Run it as root; paste its IPINFORMER_INSTALL_OK result here."
+        } catch { status = "Ошибка: \(error.localizedDescription)" }
+    }
+
+    private func copyHostScript() {
+        do {
+            let pending = try preparePendingInstallation()
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(try pending.hostScript(), forType: .string)
+            status = "Standalone host installer copied. It contains server credentials."
+        } catch { status = "Ошибка: \(error.localizedDescription)" }
+    }
+
+    private func exportManualPackage() {
+        do {
+            let pending = try preparePendingInstallation()
+            let panel = NSOpenPanel()
+            panel.title = "Choose a private folder for the installation package"
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let parent = panel.url else { return }
+            let destination = parent.appendingPathComponent("IPInformer-Server-\(pending.id.uuidString.prefix(8))")
+            try pending.writePackage(to: destination)
+            status = "Installation package saved: \(destination.path)"
+        } catch { status = "Ошибка: \(error.localizedDescription)" }
+    }
+
+    private func completeManualInstallation() {
+        guard let pendingInstallation else { return }
+        do {
+            try store.completePendingServerInstallation(pendingInstallation, result: manualResult)
+            status = "Result matched; client \(pendingInstallation.name) added as not yet verified on the VPS."
+            self.pendingInstallation = nil
+            manualResult = ""
+        } catch { status = "Ошибка: \(error.localizedDescription)" }
     }
 
     private func chooseKey() {
         let panel = NSOpenPanel()
-        panel.title = "Выберите SSH-ключ для нового VPS"
+        panel.title = AppLanguage.localized("Выберите SSH-ключ для нового VPS")
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         identityFile = url.path
@@ -189,7 +292,9 @@ struct NewServerWizardView: View {
 
     private func choosePEM(certificate: Bool) {
         let panel = NSOpenPanel()
-        panel.title = certificate ? "Выберите сертификат TLS в PEM" : "Выберите закрытый ключ TLS в PEM"
+        panel.title = certificate
+            ? AppLanguage.localized("Выберите сертификат TLS в PEM")
+            : AppLanguage.localized("Выберите закрытый ключ TLS в PEM")
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -264,14 +369,35 @@ struct NewServerWizardView: View {
     }
 
     private func deploy() async {
+        guard !isDeploying else { return }
         engine.refreshLocalState()
-        guard validated, let version = validatedVersion, version == configurationVersion,
-              version == engine.installedVersion,
-              let release = engine.releases.first(where: { $0.version == version }),
-              let sshPort = Int(sshPort), let binary else {
-            status = "Ошибка: версия sing-box изменилась, выпуск недоступен или неверный SSH-порт. Проверьте конфиги заново."
+        guard validated, let version = validatedVersion, version == configurationVersion else {
+            status = AppLanguage.localized("Ошибка: конфиги нужно проверить заново перед установкой.")
             return
         }
+        guard version == engine.installedVersion else {
+            validated = false
+            status = String(format: AppLanguage.localized("Ошибка: версия sing-box изменилась с %@ на %@. Создайте и проверьте конфиги заново."),
+                            version, engine.installedVersion ?? AppLanguage.localized("не установлена"))
+            return
+        }
+        guard let binary else {
+            status = AppLanguage.localized("Ошибка: исполняемый sing-box не найден на этом Mac.")
+            return
+        }
+        guard let sshPort = Int(sshPort), (1...65535).contains(sshPort) else {
+            status = AppLanguage.localized("Ошибка: SSH-порт должен быть числом от 1 до 65535.")
+            return
+        }
+        let pending: PendingServerInstallation
+        do { pending = try preparePendingInstallation() }
+        catch { status = "Ошибка: \(error.localizedDescription)"; return }
+        isDeploying = true
+        defer { isDeploying = false }
+        status = "Проверка конфигов и подключение к VPS…"
+        deploymentLog.reset()
+        showDeploymentLog = true
+        deploymentLog.append(status + "\n")
         do {
             guard try NewServerConfiguration.binaryVersion(binary: binary) == version else {
                 throw NSError(domain: "IPInformer", code: 24, userInfo: [NSLocalizedDescriptionKey: "Исполняемый sing-box изменился после проверки конфигов"])
@@ -287,17 +413,16 @@ struct NewServerWizardView: View {
             }
             let candidate = ClientConnection(name: name, outboundTag: actualTag,
                                              serverIPv4: host, protocolName: actualType,
-                                             singBoxVersion: release.version)
+                                             singBoxVersion: version)
             try store.previewClientConnection(candidate, outboundJSON: clientJSON)
         } catch {
             validated = false
             status = "Ошибка проверки: \(error.localizedDescription)"
+            deploymentLog.append(status + "\n")
+            deploymentLog.finish()
             return
         }
-        isDeploying = true
         status = "Проверка SSH и установка сервера…"
-        deploymentLog.reset()
-        showDeploymentLog = true
         deploymentLog.append("Начало установки на \(host), sing-box \(version)\n")
         let authentication: ServerSSHAuthentication = sshAuthentication == "password"
             ? .rootPassword(rootPassword) : .key(identityFile)
@@ -312,15 +437,24 @@ struct NewServerWizardView: View {
             DispatchQueue.main.async { logModel.append(chunk) }
         }
         let result = await Task.detached(priority: .userInitiated) {
-            Result { try ServerDeployment.deploy(configuration: server, release: release, access: access, log: report) }
+            Result { try ServerDeployment.deploy(configuration: server, version: version, access: access, log: report) }
+        }.value
+        let verification = await Task.detached(priority: .userInitiated) {
+            var last: Result<ServerDeployment.VerificationReport, Error> = .failure(
+                NSError(domain: "IPInformer.ServerVerification", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Verification was not run"]))
+            for attempt in 0..<3 {
+                last = Result { try ServerDeployment.verify(version: version, configSHA256: pending.configSHA256,
+                                                            access: access, log: report) }
+                if case .success(let check) = last, check.isInstalled { return last }
+                if attempt < 2 { Thread.sleep(forTimeInterval: 1) }
+            }
+            return last
         }.value
         rootPassword = ""
         var finalLog: String
-        switch result {
-        case .failure(let error):
-            status = "Ошибка установки: \(error.localizedDescription)"
-            finalLog = "\nОШИБКА: \(error.localizedDescription)\n"
-        case .success(let output):
+        switch verification {
+        case .success(let check) where check.isInstalled:
             do {
                 guard let data = client.data(using: .utf8),
                       let outbound = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -328,19 +462,36 @@ struct NewServerWizardView: View {
                       let actualType = outbound["type"] as? String else {
                     throw NSError(domain: "IPInformer", code: 20, userInfo: [NSLocalizedDescriptionKey: "Клиентский JSON повреждён"])
                 }
-                let connection = ClientConnection(name: connectionName, outboundTag: actualTag,
+                var connection = ClientConnection(id: pending.id, name: connectionName, outboundTag: actualTag,
                                                   serverIPv4: serverHost, protocolName: actualType,
-                                                  singBoxVersion: release.version)
+                                                  singBoxVersion: version)
+                connection.serverArchitecture = check.architecture == "x86_64" ? "amd64"
+                    : (["aarch64", "arm64"].contains(check.architecture) ? "arm64" : pending.architecture)
+                connection.serverSSHPort = sshPort
+                connection.installationVerified = true
+                connection.installationCheckedAt = Date()
                 try store.registerClientConnection(connection, outboundJSON: client,
                                                    serverConfiguration: server)
-                status = "\(output). Клиент \(connectionName) добавлен в библиотеку."
-                finalLog = "\nКлиент \(connectionName) добавлен в библиотеку.\n"
+                PendingServerInstallationStore.remove(pending.id)
+                pendingInstallation = nil
+                status = "\(check.summary). Клиент \(connectionName) добавлен."
+                finalLog = "\n\(check.summary). Клиент \(connectionName) добавлен.\n"
+                if case .failure(let error) = result {
+                    finalLog += "Первое SSH-соединение завершилось с ошибкой: \(error.localizedDescription)\n"
+                }
             } catch {
-                status = "Сервер установлен, но клиент не добавлен: \(error.localizedDescription)"
+                status = "Сервер проверен, но клиент не добавлен: \(error.localizedDescription)"
                 finalLog = "\nОШИБКА добавления клиента: \(error.localizedDescription)\n"
             }
+        case .success(let check):
+            status = "Установка не подтверждена: \(check.summary). Скрипты сохранены в ожидающей установке."
+            finalLog = "\n\(check.summary)\nСкрипты сохранены в разделе sing-box.\n"
+            if case .failure(let error) = result { finalLog += "Ошибка установки: \(error.localizedDescription)\n" }
+        case .failure(let error):
+            status = "Установка не подтверждена: \(error.localizedDescription). Скрипты сохранены."
+            finalLog = "\nПроверка VPS не удалась: \(error.localizedDescription)\nСкрипты сохранены в разделе sing-box.\n"
+            if case .failure(let deployError) = result { finalLog += "Ошибка установки: \(deployError.localizedDescription)\n" }
         }
-        isDeploying = false
         DispatchQueue.main.async {
             logModel.append(finalLog)
             logModel.finish()

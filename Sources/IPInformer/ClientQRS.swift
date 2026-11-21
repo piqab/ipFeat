@@ -20,19 +20,49 @@ enum ClientQRS {
     static let prefix = "https://qrss.netlify.app/#"
     static let sliceSize = 500
 
-    static func androidConfiguration(connection: ClientConnection, mainJSON: String) throws -> String {
+    static func androidConfiguration(connection: ClientConnection, mainJSON: String,
+                                     domainRules: [DomainRouteRule] = []) throws -> String {
         guard let root = try JSONSerialization.jsonObject(with: Data(mainJSON.utf8)) as? [String: Any],
               let outbounds = root["outbounds"] as? [[String: Any]],
               let outbound = outbounds.first(where: { $0["tag"] as? String == connection.outboundTag }),
               outbound["type"] as? String == connection.protocolName else {
             throw ClientQRSError.missingOutbound
         }
+        let enabledRules = domainRules.filter(\.enabled)
+        let requestedTags = Set(enabledRules.map(\.outboundTag))
+        var included: [[String: Any]] = [outbound]
+        var includedTags = Set([connection.outboundTag])
+        func include(_ tag: String) throws {
+            guard !includedTags.contains(tag) else { return }
+            if tag == "direct" {
+                included.append(["type": "direct", "tag": "direct"])
+                includedTags.insert(tag)
+                return
+            }
+            guard let required = outbounds.first(where: { $0["tag"] as? String == tag }) else {
+                throw RoutingConfigurationError.unknownOutbound(tag)
+            }
+            includedTags.insert(tag)
+            included.append(required)
+            if let detour = required["detour"] as? String { try include(detour) }
+        }
+        if let detour = outbound["detour"] as? String { try include(detour) }
+        for tag in requestedTags.sorted() { try include(tag) }
+        let domainRouteRules = try SingBoxConfigurationGenerator.domainRouteRules(domainRules,
+                                                                                 availableTags: includedTags)
+        let rules: [[String: Any]] = domainRouteRules.isEmpty ? [] : [
+            ["action": "sniff"],
+            ["protocol": "dns", "action": "hijack-dns"],
+            ["port": 53, "action": "hijack-dns"],
+            ["ip_version": 6, "action": "reject"]
+        ] + domainRouteRules
         let config: [String: Any] = [
             "log": ["level": "info"],
             "dns": ["strategy": "ipv4_only"],
-            "inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "auto_route": true]],
-            "outbounds": [outbound],
-            "route": ["final": connection.outboundTag, "auto_detect_interface": true]
+            "inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"],
+                           "auto_route": true, "dns_mode": "hijack"]],
+            "outbounds": included,
+            "route": ["rules": rules, "final": connection.outboundTag, "auto_detect_interface": true]
         ]
         let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         guard let json = String(data: data, encoding: .utf8) else { throw ClientQRSError.invalidData }

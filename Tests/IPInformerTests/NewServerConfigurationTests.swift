@@ -95,7 +95,7 @@ final class NewServerConfigurationTests: XCTestCase {
     func testDeploymentScriptHasValidBashSyntax() throws {
         let script = ServerDeployment.deploymentScript(
             folder: "/tmp/ipinformer-new-example", version: "1.12.0",
-            assetName: "sing-box-1.12.0-linux-arm64.tar.gz", sha256: String(repeating: "a", count: 64)
+            assetName: "sing-box-1.12.0-linux-arm64.tar.gz"
         )
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -111,15 +111,55 @@ final class NewServerConfigurationTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0,
                        String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
         XCTAssertTrue(script.contains("sha256sum -c -"))
+        XCTAssertTrue(script.contains("api.github.com/repos/SagerNet/sing-box/releases/tags/v1.12.0"))
+        XCTAssertTrue(script.contains("curl --ipv4"))
         XCTAssertTrue(script.contains("refusing to overwrite"))
         XCTAssertTrue(script.contains("test -x /usr/local/lib/ipinformer-sing-box/sing-box"))
         XCTAssertTrue(script.contains("test \"$actual_version\" = '1.12.0'"))
+        XCTAssertTrue(script.contains("systemctl enable --now ipinformer-sing-box.service"))
+        XCTAssertTrue(script.contains("systemctl is-enabled --quiet ipinformer-sing-box.service"))
         XCTAssertTrue(script.contains("set -x"))
+    }
+
+    func testServerReleaseParserRequiresExactTagAssetAndDigest() throws {
+        let asset = "sing-box-1.14.4-linux-amd64.tar.gz"
+        let script = ServerDeployment.deploymentScript(
+            folder: "/tmp/ipinformer-new-example", version: "1.14.4", assetName: asset
+        )
+        let start = try XCTUnwrap(script.range(of: "<<'PY'\n"))
+        let remainder = script[start.upperBound...]
+        let end = try XCTUnwrap(remainder.range(of: "\nPY\n"))
+        let parser = String(remainder[..<end.lowerBound]) + "\n"
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ipinformer-release-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        func parse(tag: String, assetName: String, digest: String) throws -> String {
+            let release: [String: Any] = [
+                "tag_name": tag,
+                "assets": [["name": assetName, "digest": digest]]
+            ]
+            try JSONSerialization.data(withJSONObject: release).write(to: file)
+            return try ServerDeployment.run(
+                "/usr/bin/env", ["python3", "-", file.path, "v1.14.4", asset],
+                input: Data(parser.utf8), authentication: .key("/dev/null")
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let expected = "sha256:" + String(repeating: "a", count: 64)
+        XCTAssertEqual(try parse(tag: "v1.14.4", assetName: asset, digest: expected), expected)
+        XCTAssertThrowsError(try parse(tag: "v1.14.3", assetName: asset, digest: expected))
+        XCTAssertThrowsError(try parse(tag: "v1.14.4", assetName: "other.tar.gz", digest: expected))
     }
 
     func testDebianPlatformProbeHandlesLoginBannerAndShowsMissingSystemctl() throws {
         let debian = "Welcome to Debian 13\nIPINFORMER_OS=Linux\nIPINFORMER_ARCH=x86_64\nIPINFORMER_SYSTEMCTL=/usr/bin/systemctl\nIPINFORMER_INIT=systemd\n"
         XCTAssertEqual(try ServerDeployment.parsePlatform(debian), "amd64")
+        let sshOutput = "Warning: Permanently added '144.172.95.216' (ED25519) to the list of known hosts.\r\n" +
+            "\u{001B}[0mIPINFORMER_OS=Linux\r\n" +
+            "IPINFORMER_ARCH=x86_64\r\n" +
+            "IPINFORMER_SYSTEMCTL=/usr/bin/systemctl\r\n" +
+            "IPINFORMER_INIT=systemd\r\n"
+        XCTAssertEqual(try ServerDeployment.parsePlatform(sshOutput), "amd64")
         let withoutSystemctl = debian.replacingOccurrences(of: "IPINFORMER_SYSTEMCTL=/usr/bin/systemctl", with: "IPINFORMER_SYSTEMCTL=")
         XCTAssertThrowsError(try ServerDeployment.parsePlatform(withoutSystemctl)) { error in
             XCTAssertTrue(error.localizedDescription.contains("systemctl не найдена"))

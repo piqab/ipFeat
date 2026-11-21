@@ -24,6 +24,36 @@ enum ClientConnectionRemoval {
         for index in candidate.commands.indices where candidate.commands[index].profileID.map(removedProfileIDs.contains) == true {
             candidate.commands[index].profileID = replacementProfileID
         }
+        if candidate.webKitProfileID.map(removedProfileIDs.contains) == true {
+            candidate.webKitProfileID = replacementProfileID
+        }
+        if candidate.webKitProxyEnabled && connection.outboundTag == "proxy" {
+            candidate.webKitProfileID = replacementProfileID
+            candidate.webKitProxyEnabled = false
+        }
+        let replacementRoute: DefaultRoute
+        switch replacement.kind {
+        case .outbound: replacementRoute = .outbound(replacement.outboundTag)
+        case .block: replacementRoute = .block
+        case .localOnly, .localNetwork: replacementRoute = .localOnly
+        }
+        for index in candidate.childCommandChoices.indices {
+            if candidate.childCommandChoices[index].route == .outbound(connection.outboundTag) {
+                candidate.childCommandChoices[index].route = replacementRoute
+            }
+        }
+        for index in candidate.savedProcessRoutes.indices {
+            if candidate.savedProcessRoutes[index].route == .outbound(connection.outboundTag) {
+                candidate.savedProcessRoutes[index].route = replacementRoute
+            }
+        }
+        for index in candidate.domainRules.indices where candidate.domainRules[index].outboundTag == connection.outboundTag {
+            if replacement.kind == .outbound {
+                candidate.domainRules[index].outboundTag = replacement.outboundTag
+            } else {
+                candidate.domainRules[index].enabled = false
+            }
+        }
         let mainFinal = (try? JSONSerialization.jsonObject(with: Data(configuration.mainConfigurationJSON.utf8)))
             .flatMap { $0 as? [String: Any] }
             .flatMap { $0["route"] as? [String: Any] }?["final"] as? String

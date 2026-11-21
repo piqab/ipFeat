@@ -14,22 +14,10 @@ final class RoutingStore: ObservableObject {
     @Published private(set) var validationMessage = "Добавьте профиль и программу"
     @Published private(set) var runtimeMessage = "Системная служба ещё не установлена"
     @Published private(set) var applicationActionMessage = ""
-    @Published private(set) var routeAddresses: [String: String] = [:]
-    @Published private(set) var checkingRouteTags: Set<String> = []
     @Published private(set) var configurationHistory: [ConfigurationRevision] = []
 
-    private var routeRequestTasks: [String: Task<Void, Never>] = [:]
-    private var scheduledRouteChecks: [String: Task<Void, Never>] = [:]
-    private var routeSourcesProvider: (() -> [IPSource])?
-    private var checkedAssignments: [UUID: RouteAssignment] = [:]
     private var connectedIPv4Networks: [LocalIPv4Network] = []
     private var networkTopologyTimer: Timer?
-
-    private struct RouteAssignment: Equatable {
-        let profileID: UUID?
-        let kind: RoutingProfileKind
-        let outboundTag: String
-    }
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
@@ -49,8 +37,10 @@ final class RoutingStore: ObservableObject {
         connectedIPv4Networks = NetworkInterfaceProvider.connectedIPv4Networks()
         refreshInterfaces()
         migrateLegacyProfilesIfNeeded()
+        configuration = ServerConfigurationCatalog.captureExistingOutbounds(configuration)
         refreshOutboundTags()
         synchronizeProfilesWithOutbounds()
+        migrateLegacyWebKitProfileIfNeeded()
         let fallbackTag = outboundTags.first ?? ""
         for index in configuration.profiles.indices
         where configuration.profiles[index].kind == .outbound && configuration.profiles[index].outboundTag.isEmpty {
@@ -65,26 +55,17 @@ final class RoutingStore: ObservableObject {
         interfaces = NetworkInterfaceProvider.availableInterfaces()
     }
 
-    func startRouteMonitoring(sourcesProvider: @escaping () -> [IPSource]) {
-        routeSourcesProvider = sourcesProvider
-        checkedAssignments = routeAssignments()
+    func startNetworkTopologyMonitoring() {
         updateConnectedNetworks()
         networkTopologyTimer?.invalidate()
         networkTopologyTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.updateConnectedNetworks() }
         }
-        checkRouteAddressesNow()
     }
 
-    func stopRouteMonitoring() {
+    func stopNetworkTopologyMonitoring() {
         networkTopologyTimer?.invalidate()
         networkTopologyTimer = nil
-        for task in scheduledRouteChecks.values { task.cancel() }
-        scheduledRouteChecks = [:]
-        for task in routeRequestTasks.values { task.cancel() }
-        routeRequestTasks = [:]
-        checkingRouteTags = []
-        routeSourcesProvider = nil
     }
 
     private func updateConnectedNetworks() {
@@ -93,49 +74,6 @@ final class RoutingStore: ObservableObject {
         connectedIPv4Networks = current
         refreshInterfaces()
         regenerateConfiguration()
-    }
-
-    func isCheckingRoute(_ tag: String) -> Bool {
-        checkingRouteTags.contains(tag)
-    }
-
-    func checkRouteAddressesNow(for requestedTags: Set<String>? = nil) {
-        let endpoints = SingBoxConfigurationGenerator.probeEndpoints(for: configuration)
-        let activeTags = Set(endpoints.map(\.outboundTag))
-        pruneRouteChecks(keeping: activeTags)
-        let selected = endpoints.filter { requestedTags?.contains($0.outboundTag) ?? true }
-        guard !selected.isEmpty else { return }
-        let sources = routeSourcesProvider?().filter(\.isEnabled) ?? []
-        for endpoint in selected {
-            let tag = endpoint.outboundTag
-            scheduledRouteChecks.removeValue(forKey: tag)?.cancel()
-            routeRequestTasks.removeValue(forKey: tag)?.cancel()
-            routeAddresses.removeValue(forKey: tag)
-            guard !sources.isEmpty else {
-                routeAddresses[tag] = "OFF"
-                checkingRouteTags.remove(tag)
-                continue
-            }
-            checkingRouteTags.insert(tag)
-            routeRequestTasks[tag] = Task { [weak self] in
-                let address = await Self.fetchRouteAddress(endpoint: endpoint, sources: sources)
-                guard !Task.isCancelled, let self else { return }
-                self.routeAddresses[tag] = address ?? "OFF"
-                self.checkingRouteTags.remove(tag)
-                self.routeRequestTasks[tag] = nil
-            }
-        }
-    }
-
-    private func pruneRouteChecks(keeping activeTags: Set<String>) {
-        routeAddresses = routeAddresses.filter { activeTags.contains($0.key) }
-        for tag in Array(scheduledRouteChecks.keys) where !activeTags.contains(tag) {
-            scheduledRouteChecks.removeValue(forKey: tag)?.cancel()
-        }
-        for tag in Array(routeRequestTasks.keys) where !activeTags.contains(tag) {
-            routeRequestTasks.removeValue(forKey: tag)?.cancel()
-        }
-        checkingRouteTags.formIntersection(activeTags)
     }
 
     func effectiveProfile(for application: RoutedApplication) -> RoutingProfile? {
@@ -154,57 +92,6 @@ final class RoutingStore: ObservableObject {
         return tag.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func routeAssignments() -> [UUID: RouteAssignment] {
-        var assignments: [UUID: RouteAssignment] = [:]
-        for application in configuration.applications {
-            if let profile = effectiveProfile(for: application) {
-                assignments[application.id] = RouteAssignment(
-                    profileID: profile.id, kind: profile.kind, outboundTag: profile.outboundTag
-                )
-            } else if let tag = effectiveOutboundTag(for: application) {
-                assignments[application.id] = RouteAssignment(profileID: nil, kind: .outbound, outboundTag: tag)
-            }
-        }
-        return assignments
-    }
-
-    private func refreshRouteChecksForProfileChanges() {
-        let assignments = routeAssignments()
-        guard assignments != checkedAssignments else { return }
-        let changedIDs = Set(assignments.keys).union(checkedAssignments.keys).filter {
-            assignments[$0] != checkedAssignments[$0]
-        }
-        checkedAssignments = assignments
-        let activeTags = Set(SingBoxConfigurationGenerator.probeEndpoints(for: configuration).map(\.outboundTag))
-        pruneRouteChecks(keeping: activeTags)
-        let changedTags = Set(changedIDs.compactMap { id -> String? in
-            guard let assignment = assignments[id], assignment.kind == .outbound else { return nil }
-            return assignment.outboundTag.trimmingCharacters(in: .whitespacesAndNewlines)
-        }).intersection(activeTags)
-        guard routeSourcesProvider != nil else { return }
-        if validationMessage.hasPrefix("Конфигурация готова") {
-            for tag in changedTags {
-                scheduledRouteChecks.removeValue(forKey: tag)?.cancel()
-                routeRequestTasks.removeValue(forKey: tag)?.cancel()
-                routeAddresses.removeValue(forKey: tag)
-                checkingRouteTags.insert(tag)
-                scheduledRouteChecks[tag] = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)
-                    guard !Task.isCancelled, let self else { return }
-                    self.scheduledRouteChecks[tag] = nil
-                    self.checkRouteAddressesNow(for: [tag])
-                }
-            }
-        } else {
-            for tag in changedTags {
-                scheduledRouteChecks.removeValue(forKey: tag)?.cancel()
-                routeRequestTasks.removeValue(forKey: tag)?.cancel()
-                checkingRouteTags.remove(tag)
-                routeAddresses.removeValue(forKey: tag)
-            }
-        }
-    }
-
     func setAlwaysOn(_ enabled: Bool) {
         configuration.singBoxAlwaysOn = enabled
         persistAndRegenerate()
@@ -219,13 +106,22 @@ final class RoutingStore: ObservableObject {
         persistAndRegenerate()
     }
 
-    func setWebKitProxyEnabled(_ enabled: Bool) {
-        guard !enabled || outboundTags.contains("proxy") else {
-            runtimeMessage = "Добавьте outbound proxy в основную конфигурацию"
-            return
+    var selectedWebKitProfileID: UUID? {
+        configuration.webKitProfileID ?? (configuration.webKitProxyEnabled
+            ? configuration.profiles.first(where: { $0.kind == .outbound && $0.outboundTag == "proxy" })?.id : nil)
+    }
+
+    func setWebKitProfile(_ id: UUID?) {
+        if let id {
+            guard let profile = configuration.profiles.first(where: { $0.id == id }) else { return }
+            if profile.kind == .outbound && !outboundTags.contains(profile.outboundTag) {
+                runtimeMessage = "WebKit profile route is unavailable: \(profile.outboundTag)"
+                return
+            }
         }
-        guard configuration.webKitProxyEnabled != enabled else { return }
-        configuration.webKitProxyEnabled = enabled
+        guard configuration.webKitProfileID != id || configuration.webKitProxyEnabled else { return }
+        configuration.webKitProfileID = id
+        configuration.webKitProxyEnabled = false
         persistAndRegenerate()
     }
 
@@ -236,7 +132,8 @@ final class RoutingStore: ObservableObject {
     }
 
     func addProfile() {
-        configuration.profiles.append(RoutingProfile(outboundTag: outboundTags.first ?? ""))
+        configuration.profiles.append(RoutingProfile(name: AppLanguage.localized("Новый профиль"),
+                                                     outboundTag: outboundTags.first ?? ""))
         persistAndRegenerate()
     }
 
@@ -244,6 +141,7 @@ final class RoutingStore: ObservableObject {
     func applyMainConfigurationJSON(_ json: String) -> Bool {
         var candidate = configuration
         candidate.mainConfigurationJSON = json
+        candidate.usesManagedServerConfiguration = false
         do {
             let tags = try SingBoxConfigurationGenerator.outboundTags(in: json)
             if case .outbound(let selectedTag)? = candidate.defaultRoute,
@@ -263,7 +161,6 @@ final class RoutingStore: ObservableObject {
             ensureSelfApplication()
             persist()
             regenerateConfiguration()
-            refreshRouteChecksForProfileChanges()
             if configurationHistory.first?.json != json {
                 configurationHistory.insert(ConfigurationRevision(date: Date(), json: json), at: 0)
                 configurationHistory = Array(configurationHistory.prefix(30))
@@ -277,6 +174,79 @@ final class RoutingStore: ObservableObject {
             runtimeMessage = error.localizedDescription
             return false
         }
+    }
+
+    var serverConfigurationMigration: ServerConfigurationCatalog.MigrationReport {
+        ServerConfigurationCatalog.report(configuration)
+    }
+
+    func previewManagedServerConfiguration() throws -> String {
+        try ServerConfigurationCatalog.managedJSON(for: configuration)
+    }
+
+    func adoptSavedServerConfiguration(replacementTag: String? = nil) throws {
+        guard !configuration.usesManagedServerConfiguration else { return }
+        let report = serverConfigurationMigration
+        guard report.missingConnections.isEmpty else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Restore missing client outbounds first")
+        }
+        var candidate = configuration
+        let previousJSON = candidate.mainConfigurationJSON
+        let retainedTags = Set(candidate.clientConnections.map(\.outboundTag)).union(["direct"])
+        if !report.unresolvedRoutes.isEmpty {
+            guard let replacementTag, retainedTags.contains(replacementTag) else {
+                throw RoutingConfigurationError.invalidMainConfiguration("Choose a saved server or direct for unavailable routes")
+            }
+            candidate = try ServerConfigurationCatalog.reassignUnavailableRoutes(candidate, to: replacementTag)
+        }
+        candidate.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: candidate)
+        candidate.usesManagedServerConfiguration = true
+        if candidate.defaultRoute == nil {
+            let oldFinal = (try? JSONSerialization.jsonObject(with: Data(previousJSON.utf8)))
+                .flatMap { $0 as? [String: Any] }
+                .flatMap { $0["route"] as? [String: Any] }?["final"] as? String
+            candidate.defaultRoute = .outbound(oldFinal.flatMap { retainedTags.contains($0) ? $0 : nil }
+                ?? replacementTag ?? "direct")
+        }
+        let generated = try SingBoxConfigurationGenerator.data(for: candidate, localNetworks: connectedIPv4Networks)
+        if singBoxBinaryPath() != nil { try validateWithSingBox(generated) }
+        configuration = candidate
+        outboundTags = try SingBoxConfigurationGenerator.outboundTags(in: candidate.mainConfigurationJSON)
+        persistAndRegenerate()
+        recordConfigurationChange(from: previousJSON)
+        runtimeMessage = "Saved server connections now generate the sing-box configuration"
+    }
+
+    func restoreClientOutbound(_ id: UUID, json: String) throws {
+        guard let index = configuration.clientConnections.firstIndex(where: { $0.id == id }),
+              let root = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Client outbound tag does not match this connection")
+        }
+        let tag = configuration.clientConnections[index].outboundTag
+        let outbound = root["tag"] as? String == tag ? root :
+            (root["outbounds"] as? [[String: Any]])?.first(where: { $0["tag"] as? String == tag })
+        guard let outbound,
+              let data = try? JSONSerialization.data(withJSONObject: outbound, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Client outbound tag does not match this connection")
+        }
+        var candidate = configuration
+        candidate.clientConnections[index].outboundJSON = String(decoding: data, as: UTF8.self)
+        if candidate.usesManagedServerConfiguration {
+            candidate.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: candidate)
+            let generated = try SingBoxConfigurationGenerator.data(for: candidate, localNetworks: connectedIPv4Networks)
+            if singBoxBinaryPath() != nil { try validateWithSingBox(generated) }
+        }
+        let previousJSON = configuration.mainConfigurationJSON
+        configuration = candidate
+        persistAndRegenerate()
+        recordConfigurationChange(from: previousJSON)
+    }
+
+    private func recordConfigurationChange(from previousJSON: String) {
+        guard previousJSON != configuration.mainConfigurationJSON else { return }
+        configurationHistory.insert(ConfigurationRevision(date: Date(), json: configuration.mainConfigurationJSON), at: 0)
+        configurationHistory = Array(configurationHistory.prefix(30))
+        saveConfigurationHistory()
     }
 
     func importMainConfiguration(from url: URL) {
@@ -301,6 +271,31 @@ final class RoutingStore: ObservableObject {
         guard !outboundTags.contains(connection.outboundTag) else {
             throw RoutingConfigurationError.invalidMainConfiguration("Тег \(connection.outboundTag) уже используется")
         }
+        var storedConnection = connection
+        storedConnection.outboundJSON = outboundJSON
+        let hadNamedRoute = configuration.profiles.contains {
+            $0.kind == .outbound && $0.outboundTag == connection.outboundTag
+        }
+        if configuration.usesManagedServerConfiguration {
+            var candidate = configuration
+            candidate.clientConnections.append(storedConnection)
+            candidate.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: candidate)
+            let generated = try SingBoxConfigurationGenerator.data(for: candidate, localNetworks: connectedIPv4Networks)
+            if singBoxBinaryPath() != nil { try validateWithSingBox(generated) }
+            try ServerSecretStore.save(serverConfiguration, id: connection.id)
+            let previousJSON = configuration.mainConfigurationJSON
+            configuration = candidate
+            outboundTags = try SingBoxConfigurationGenerator.outboundTags(in: candidate.mainConfigurationJSON)
+            synchronizeProfilesWithOutbounds()
+            if !hadNamedRoute, let index = configuration.profiles.firstIndex(where: {
+                $0.kind == .outbound && $0.outboundTag == connection.outboundTag
+            }) {
+                configuration.profiles[index].name = connection.name
+            }
+            persistAndRegenerate()
+            recordConfigurationChange(from: previousJSON)
+            return
+        }
         let previousJSON = configuration.mainConfigurationJSON
         guard let rootData = previousJSON.data(using: .utf8),
               var root = try JSONSerialization.jsonObject(with: rootData) as? [String: Any] else {
@@ -321,11 +316,42 @@ final class RoutingStore: ObservableObject {
             if configuration.mainConfigurationJSON != previousJSON { _ = applyMainConfigurationJSON(previousJSON) }
             throw RoutingConfigurationError.invalidMainConfiguration(failure)
         }
-        configuration.clientConnections.append(connection)
-        if let index = configuration.profiles.firstIndex(where: { $0.kind == .outbound && $0.outboundTag == connection.outboundTag }) {
+        configuration.clientConnections.append(storedConnection)
+        if !hadNamedRoute, let index = configuration.profiles.firstIndex(where: {
+            $0.kind == .outbound && $0.outboundTag == connection.outboundTag
+        }) {
             configuration.profiles[index].name = connection.name
         }
         persistAndRegenerate()
+    }
+
+    func completePendingServerInstallation(_ pending: PendingServerInstallation, result: String) throws {
+        guard pending.accepts(result) else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Installation result does not match this server, version and configuration")
+        }
+        if configuration.clientConnections.contains(where: { $0.id == pending.id }) {
+            PendingServerInstallationStore.remove(pending.id)
+            return
+        }
+        var connection = ClientConnection(id: pending.id, name: pending.name,
+            outboundTag: pending.outboundTag, serverIPv4: pending.serverIPv4,
+            protocolName: pending.protocolName, singBoxVersion: pending.version)
+        connection.serverArchitecture = pending.architecture
+        connection.serverSSHPort = pending.sshPort
+        connection.installationVerified = false
+        try previewClientConnection(connection, outboundJSON: pending.clientJSON)
+        try registerClientConnection(connection, outboundJSON: pending.clientJSON,
+                                     serverConfiguration: pending.serverJSON)
+        PendingServerInstallationStore.remove(pending.id)
+    }
+
+    func updateServerInstallation(_ id: UUID, verified: Bool, architecture: String?, sshPort: Int) {
+        guard let index = configuration.clientConnections.firstIndex(where: { $0.id == id }) else { return }
+        configuration.clientConnections[index].installationVerified = verified
+        configuration.clientConnections[index].installationCheckedAt = Date()
+        configuration.clientConnections[index].serverArchitecture = architecture
+        configuration.clientConnections[index].serverSSHPort = sshPort
+        persist()
     }
 
     func previewClientConnection(_ connection: ClientConnection, outboundJSON: String) throws {
@@ -367,7 +393,10 @@ final class RoutingStore: ObservableObject {
     }
 
     func removeClientConnection(_ id: UUID, replacementProfileID: UUID) throws {
-        let candidate = try preparedClientRemoval(id, replacementProfileID: replacementProfileID)
+        var candidate = try preparedClientRemoval(id, replacementProfileID: replacementProfileID)
+        if candidate.usesManagedServerConfiguration {
+            candidate.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: candidate)
+        }
         let updatedTags = try SingBoxConfigurationGenerator.outboundTags(in: candidate.mainConfigurationJSON)
         try ServerSecretStore.deleteChecked(id: id)
         let previousJSON = configuration.mainConfigurationJSON
@@ -383,21 +412,29 @@ final class RoutingStore: ObservableObject {
     }
 
     private func preparedClientRemoval(_ id: UUID, replacementProfileID: UUID) throws -> RoutingConfiguration {
-        let candidate = try ClientConnectionRemoval.prepare(configuration, id: id,
+        var candidate = try ClientConnectionRemoval.prepare(configuration, id: id,
                                                             replacementProfileID: replacementProfileID)
+        if candidate.usesManagedServerConfiguration {
+            candidate.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: candidate)
+        }
         let generated = try SingBoxConfigurationGenerator.data(for: candidate, localNetworks: connectedIPv4Networks)
         if singBoxBinaryPath() != nil { try validateWithSingBox(generated) }
         return candidate
     }
 
     func restoreConfiguration(_ restored: RoutingConfiguration, history: [ConfigurationRevision]) throws -> [String] {
-        let prepared = Self.prepareRestoredConfiguration(restored)
+        var prepared = Self.prepareRestoredConfiguration(restored)
+        prepared.configuration = ServerConfigurationCatalog.captureExistingOutbounds(prepared.configuration)
+        if prepared.configuration.usesManagedServerConfiguration {
+            prepared.configuration.mainConfigurationJSON = try ServerConfigurationCatalog.managedJSON(for: prepared.configuration)
+        }
         let tags = try SingBoxConfigurationGenerator.outboundTags(in: prepared.configuration.mainConfigurationJSON)
         let generated = try SingBoxConfigurationGenerator.data(for: prepared.configuration, localNetworks: connectedIPv4Networks)
         if singBoxBinaryPath() != nil { try validateWithSingBox(generated) }
         configuration = prepared.configuration
         outboundTags = tags
         synchronizeProfilesWithOutbounds()
+        migrateLegacyWebKitProfileIfNeeded()
         ensureSelfApplication()
         persistAndRegenerate()
         configurationHistory = Array(history.prefix(30))
@@ -412,6 +449,10 @@ final class RoutingStore: ObservableObject {
     static func prepareRestoredConfiguration(_ original: RoutingConfiguration) -> (configuration: RoutingConfiguration, missingApplications: [String]) {
         var restored = original
         var missing: [String] = []
+        for index in restored.clientConnections.indices {
+            restored.clientConnections[index].installationVerified = nil
+            restored.clientConnections[index].installationCheckedAt = nil
+        }
         for index in restored.applications.indices {
             let app = restored.applications[index]
             if app.bundleIdentifier == selfBundleIdentifier {
@@ -443,7 +484,14 @@ final class RoutingStore: ObservableObject {
             let command = restored.commands[index]
             if !FileManager.default.isExecutableFile(atPath: command.executablePath) {
                 restored.commands[index].enabled = false
-                missing.append("Команда: \(command.name)")
+                missing.append("Command: \(command.name)")
+            }
+        }
+        for index in restored.savedProcessRoutes.indices where restored.savedProcessRoutes[index].enabled {
+            let route = restored.savedProcessRoutes[index]
+            if !FileManager.default.isExecutableFile(atPath: route.executablePath) {
+                restored.savedProcessRoutes[index].enabled = false
+                missing.append("Saved route: \(URL(fileURLWithPath: route.executablePath).lastPathComponent)")
             }
         }
         return (restored, missing)
@@ -482,6 +530,7 @@ final class RoutingStore: ObservableObject {
     func removeProfile(_ profile: RoutingProfile) {
         guard !profile.isBuiltIn else { return }
         configuration.profiles.removeAll { $0.id == profile.id }
+        if configuration.webKitProfileID == profile.id { configuration.webKitProfileID = nil }
         for index in configuration.groups.indices where configuration.groups[index].profileID == profile.id {
             configuration.groups[index].profileID = nil
         }
@@ -530,6 +579,12 @@ final class RoutingStore: ObservableObject {
         persistAndRegenerate()
     }
 
+    func removeCommands(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        configuration.commands.removeAll { ids.contains($0.id) }
+        persistAndRegenerate()
+    }
+
     func relinkCommand(_ command: RoutedCommand, to url: URL) -> String? {
         let path = url.standardizedFileURL.path
         guard !path.contains(".app/"), FileManager.default.isExecutableFile(atPath: path) else {
@@ -550,7 +605,7 @@ final class RoutingStore: ObservableObject {
     }
 
     func addGroup() {
-        configuration.groups.insert(RoutingGroup(id: UUID(), name: "Новая группа", profileID: nil), at: 0)
+        configuration.groups.insert(RoutingGroup(id: UUID(), name: AppLanguage.localized("Новая группа"), profileID: nil), at: 0)
         persistAndRegenerate()
     }
 
@@ -564,6 +619,9 @@ final class RoutingStore: ObservableObject {
         configuration.groups.removeAll { $0.id == group.id }
         for index in configuration.applications.indices where configuration.applications[index].groupID == group.id {
             configuration.applications[index].groupID = nil
+        }
+        for index in configuration.savedProcessRoutes.indices where configuration.savedProcessRoutes[index].groupID == group.id {
+            configuration.savedProcessRoutes[index].groupID = nil
         }
         persistAndRegenerate()
     }
@@ -657,6 +715,81 @@ final class RoutingStore: ObservableObject {
         persistAndRegenerate()
     }
 
+    func saveProcessRoute(executablePath: String, route: DefaultRoute) {
+        let path = URL(fileURLWithPath: executablePath).standardizedFileURL.path
+        guard path.hasPrefix("/"), !path.contains("\n"),
+              !configuration.applications.contains(where: { $0.executablePath == path }),
+              !configuration.commands.contains(where: { $0.executablePath == path }) else { return }
+        if let index = configuration.savedProcessRoutes.firstIndex(where: { $0.executablePath == path }) {
+            configuration.savedProcessRoutes[index].route = route
+            configuration.savedProcessRoutes[index].enabled = true
+        } else {
+            configuration.savedProcessRoutes.append(SavedProcessRoute(executablePath: path, route: route))
+        }
+        persistAndRegenerate()
+    }
+
+    func updateProcessRoutes(ids: Set<UUID>, groupID: UUID? = nil, route: DefaultRoute? = nil,
+                             remove: Bool = false) {
+        guard !ids.isEmpty else { return }
+        if remove {
+            configuration.savedProcessRoutes.removeAll { ids.contains($0.id) }
+        } else {
+            guard groupID == nil || configuration.groups.contains(where: { $0.id == groupID }) else { return }
+            for index in configuration.savedProcessRoutes.indices where ids.contains(configuration.savedProcessRoutes[index].id) {
+                if let route { configuration.savedProcessRoutes[index].route = route }
+                else { configuration.savedProcessRoutes[index].groupID = groupID }
+            }
+        }
+        persistAndRegenerate()
+    }
+
+    func setProcessRouteEnabled(_ id: UUID, enabled: Bool) {
+        guard let index = configuration.savedProcessRoutes.firstIndex(where: { $0.id == id }),
+              !enabled || FileManager.default.isExecutableFile(atPath: configuration.savedProcessRoutes[index].executablePath) else { return }
+        configuration.savedProcessRoutes[index].enabled = enabled
+        persistAndRegenerate()
+    }
+
+    func relinkProcessRoute(_ id: UUID, to url: URL) -> String? {
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path),
+              !configuration.savedProcessRoutes.contains(where: { $0.id != id && $0.executablePath == path }) else {
+            return "Choose a unique executable file."
+        }
+        guard let index = configuration.savedProcessRoutes.firstIndex(where: { $0.id == id }) else {
+            return "Saved route no longer exists."
+        }
+        configuration.savedProcessRoutes[index].executablePath = path
+        configuration.savedProcessRoutes[index].enabled = true
+        persistAndRegenerate()
+        return nil
+    }
+
+    func updateCategoryItems(applicationIDs: Set<UUID>, processRouteIDs: Set<UUID>,
+                             groupID: UUID?, remove: Bool) {
+        guard !applicationIDs.isEmpty || !processRouteIDs.isEmpty else { return }
+        guard remove || groupID == nil || configuration.groups.contains(where: { $0.id == groupID }) else { return }
+        let protectedIDs = Set(configuration.applications.filter {
+            $0.bundleIdentifier == Self.selfBundleIdentifier
+        }.map(\.id))
+        let removableApps = applicationIDs.subtracting(protectedIDs)
+        if remove {
+            configuration.applications.removeAll { removableApps.contains($0.id) }
+            configuration.childCommandChoices.removeAll { removableApps.contains($0.applicationID) }
+            configuration.redirects.removeAll { $0.applicationID.map(removableApps.contains) == true }
+            configuration.savedProcessRoutes.removeAll { processRouteIDs.contains($0.id) }
+        } else {
+            for index in configuration.applications.indices where applicationIDs.contains(configuration.applications[index].id) {
+                configuration.applications[index].groupID = groupID
+            }
+            for index in configuration.savedProcessRoutes.indices where processRouteIDs.contains(configuration.savedProcessRoutes[index].id) {
+                configuration.savedProcessRoutes[index].groupID = groupID
+            }
+        }
+        persistAndRegenerate()
+    }
+
     func addRedirect() {
         configuration.redirects.append(ApplicationRedirect(
             id: UUID(), applicationID: configuration.applications.first?.id,
@@ -674,6 +807,36 @@ final class RoutingStore: ObservableObject {
 
     func removeRedirect(_ redirect: ApplicationRedirect) {
         configuration.redirects.removeAll { $0.id == redirect.id }
+        persistAndRegenerate()
+    }
+
+    func saveDomainRule(_ rule: DomainRouteRule) throws {
+        _ = try rule.matchFields()
+        guard outboundTags.contains(rule.outboundTag) else {
+            throw RoutingConfigurationError.unknownOutbound(rule.outboundTag)
+        }
+        guard !configuration.domainRules.contains(where: {
+            $0.id != rule.id && $0.normalizedPattern == rule.normalizedPattern
+        }) else {
+            throw RoutingConfigurationError.invalidMainConfiguration("Domain pattern already exists: \(rule.pattern)")
+        }
+        if let index = configuration.domainRules.firstIndex(where: { $0.id == rule.id }) {
+            configuration.domainRules[index] = rule
+        } else {
+            configuration.domainRules.append(rule)
+        }
+        persistAndRegenerate()
+    }
+
+    func setDomainRuleEnabled(_ id: UUID, enabled: Bool) {
+        guard let index = configuration.domainRules.firstIndex(where: { $0.id == id }) else { return }
+        guard !enabled || outboundTags.contains(configuration.domainRules[index].outboundTag) else { return }
+        configuration.domainRules[index].enabled = enabled
+        persistAndRegenerate()
+    }
+
+    func removeDomainRule(_ id: UUID) {
+        configuration.domainRules.removeAll { $0.id == id }
         persistAndRegenerate()
     }
 
@@ -731,7 +894,6 @@ final class RoutingStore: ObservableObject {
     private func persistAndRegenerate() {
         persist()
         regenerateConfiguration()
-        refreshRouteChecksForProfileChanges()
     }
 
     private func persist() {
@@ -794,6 +956,13 @@ final class RoutingStore: ObservableObject {
         for tag in outboundTags where !configuration.profiles.contains(where: { $0.kind == .outbound && $0.outboundTag == tag }) {
             configuration.profiles.append(RoutingProfile(name: tag, outboundTag: tag))
         }
+    }
+
+    private func migrateLegacyWebKitProfileIfNeeded() {
+        guard configuration.webKitProxyEnabled, configuration.webKitProfileID == nil,
+              let profile = configuration.profiles.first(where: { $0.kind == .outbound && $0.outboundTag == "proxy" }) else { return }
+        configuration.webKitProfileID = profile.id
+        configuration.webKitProxyEnabled = false
     }
 
     private func migrateLegacyProfilesIfNeeded() {
@@ -903,61 +1072,4 @@ final class RoutingStore: ObservableObject {
             .first(where: FileManager.default.fileExists(atPath:))
     }
 
-    private nonisolated static func fetchRouteAddress(
-        endpoint: RouteProbeEndpoint,
-        sources: [IPSource]
-    ) async -> String? {
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
-        sessionConfiguration.waitsForConnectivity = false
-        sessionConfiguration.connectionProxyDictionary = [
-            "SOCKSEnable": true,
-            "SOCKSProxy": "127.0.0.1",
-            "SOCKSPort": endpoint.port
-        ]
-        let session = URLSession(configuration: sessionConfiguration)
-        defer { session.invalidateAndCancel() }
-
-        for source in sources {
-            guard !Task.isCancelled, let url = URL(string: source.url) else { continue }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 6
-            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            do {
-                let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode),
-                      let address = extractIPv4(from: data) else { continue }
-                return address
-            } catch {
-                continue
-            }
-        }
-        return nil
-    }
-
-    private nonisolated static func extractIPv4(from data: Data) -> String? {
-        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let value = object["ip"] as? String,
-           isIPv4(value) {
-            return value.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        for line in text.components(separatedBy: .newlines) {
-            let candidate = line.hasPrefix("ip=") ? String(line.dropFirst(3)) : line
-            if isIPv4(candidate) {
-                return candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-        return nil
-    }
-
-    private nonisolated static func isIPv4(_ value: String) -> Bool {
-        let parts = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return false }
-        return parts.allSatisfy { part in
-            guard !part.isEmpty, part.count <= 3, let number = Int(part) else { return false }
-            return (0...255).contains(number)
-        }
-    }
 }

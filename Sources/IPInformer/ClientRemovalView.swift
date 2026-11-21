@@ -51,6 +51,10 @@ struct ClientRemovalView: View {
         let commands = store.configuration.commands.filter { $0.profileID.map(removedIDs.contains) == true }.map(\.name)
         var parts: [String] = []
         if store.selectedDefaultRoute == .outbound(connection.outboundTag) { parts.append("общий маршрут") }
+        if store.configuration.webKitProfileID.map(removedIDs.contains) == true ||
+           (store.configuration.webKitProxyEnabled && connection.outboundTag == "proxy") {
+            parts.append("WebKit")
+        }
         if !groups.isEmpty { parts.append("группы: \(groups.joined(separator: ", "))") }
         if !apps.isEmpty { parts.append("программы: \(apps.joined(separator: ", "))") }
         if !commands.isEmpty { parts.append("команды: \(commands.joined(separator: ", "))") }
@@ -87,7 +91,7 @@ struct ClientRemovalView: View {
             }
             Picker("Новый маршрут для назначений", selection: $replacementProfileID) {
                 ForEach(choices) { profile in
-                    Text(profile.name).tag(profile.id)
+                    Text(profile.displayName).tag(profile.id)
                 }
             }
             Text("При удалении клиентского подключения эти назначения перейдут на выбранный маршрут. Конфигурация sing-box будет применена заново.")

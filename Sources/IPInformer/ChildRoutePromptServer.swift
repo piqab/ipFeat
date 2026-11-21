@@ -141,15 +141,19 @@ final class ChildRoutePromptServer {
         }
         let processName = URL(fileURLWithPath: request.command_path).lastPathComponent
         let parentName = request.parent_path.map { URL(fileURLWithPath: $0).lastPathComponent }
-        let title = isUnknown ? "Route for an unlisted process" : "Child command route"
+        let title = AppLanguage.localized(isUnknown ? "Route for an unlisted process" : "Child command route")
         let detail = isUnknown
-            ? "\(processName) opened a public IPv4 connection. Choose a route for this run."
-            : "\(processName) opened a public IPv4 connection from \(application?.name ?? request.application_name ?? "an application")\(parentName.map { " through \($0)" } ?? ""). Choose its route."
-        let options = store.outboundTags.map { RoutePromptOption(label: $0, route: .outbound($0)) }
+            ? String(format: AppLanguage.localized("%@ opened a public IPv4 connection. Save a route for future launches or use it once."), processName)
+            : String(format: AppLanguage.localized("%@ opened a public IPv4 connection from %@%@. Choose its route."),
+                     processName, application?.name ?? request.application_name ?? AppLanguage.localized("an application"),
+                     parentName.map { String(format: AppLanguage.localized(" through %@"), $0) } ?? "")
+        let options = store.outboundTags.map {
+            RoutePromptOption(label: store.configuration.outboundDisplayName(for: $0), route: .outbound($0))
+        }
             + (isUnknown
-                ? [RoutePromptOption(label: "Block public internet", route: .block)]
-                : [RoutePromptOption(label: "No network", route: .block),
-                   RoutePromptOption(label: "This Mac only", route: .localOnly)])
+                ? [RoutePromptOption(label: AppLanguage.localized("Block public internet"), route: .block)]
+                : [RoutePromptOption(label: AppLanguage.localized("No network"), route: .block),
+                   RoutePromptOption(label: AppLanguage.localized("This Mac only"), route: .localOnly)])
         let id = UUID()
         let panel = RoutePromptPanel(
             title: title, detail: detail, processPath: request.command_path,
@@ -157,9 +161,13 @@ final class ChildRoutePromptServer {
             isUnknown: isUnknown, options: options, offset: activePanels.count
         ) { [weak self] decision in
             guard let self else { complete("reject"); return }
-            if case .selected(let selected) = decision, !isUnknown, let appID {
-                self.store.saveChildCommandChoice(applicationID: appID,
-                                                   executablePath: request.command_path, route: selected)
+            if case .selected(let selected) = decision {
+                if isUnknown {
+                    self.store.saveProcessRoute(executablePath: request.command_path, route: selected)
+                } else if let appID {
+                    self.store.saveChildCommandChoice(applicationID: appID,
+                                                       executablePath: request.command_path, route: selected)
+                }
             }
             self.activePanels.removeValue(forKey: id)
             complete(Self.routeString(for: decision))
@@ -172,7 +180,7 @@ final class ChildRoutePromptServer {
         switch decision {
         case .ordinaryPolicy: return "\u{0}policy"
         case .blocked: return "reject"
-        case .selected(let route):
+        case .selected(let route), .once(let route):
             switch route {
             case .outbound(let tag): return tag
             case .localOnly, .block: return "reject"

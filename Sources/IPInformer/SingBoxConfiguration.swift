@@ -24,7 +24,11 @@ enum SingBoxConfigurationGenerator {
         var baseConfiguration = configuration
         baseConfiguration.applications = []
         baseConfiguration.commands = []
+        baseConfiguration.savedProcessRoutes = []
         baseConfiguration.redirects = []
+        baseConfiguration.domainRules = []
+        baseConfiguration.webKitProfileID = nil
+        baseConfiguration.webKitProxyEnabled = false
         let base = try build(for: baseConfiguration, localNetworks: localNetworks, ancestorMatching: false).data
         let prompts: [[String: Any]] = configuration.applications.filter { $0.enabled && $0.askChildCommands }.map { app in
             let savedPaths = configuration.childCommandChoices
@@ -37,20 +41,27 @@ enum SingBoxConfigurationGenerator {
             return ["application_id": app.id.uuidString,
              "application_name": app.name,
              "process_path_regex": processPathPatterns(for: app),
-             "exclude_process_paths": Array(Set(savedPaths + globalPaths)).sorted()]
+             "exclude_process_paths": Array(Set(savedPaths + globalPaths + configuration.savedProcessRoutes.filter(\.enabled).map(\.executablePath))).sorted()]
         }
         let socketPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/IPInformer/child-route.sock").path
         let knownAppPatterns = configuration.applications.flatMap(processPathPatterns)
-            + (configuration.webKitProxyEnabled ? ["com\\.apple\\.WebKit\\.Networking"] : [])
+            + ((configuration.webKitProfileID != nil || configuration.webKitProxyEnabled)
+                ? ["com\\.apple\\.WebKit\\.Networking"] : [])
         let knownCommandPaths = configuration.commands.flatMap { command -> [String] in
             let url = URL(fileURLWithPath: command.executablePath).standardizedFileURL
             return [url.path, url.resolvingSymlinksInPath().path]
+        } + configuration.savedProcessRoutes.filter(\.enabled).flatMap { choice -> [String] in
+            let url = URL(fileURLWithPath: choice.executablePath).standardizedFileURL
+            return [url.path, url.resolvingSymlinksInPath().path]
         }
+        let enabledDomains = configuration.domainRules.filter(\.enabled)
         let policy = try JSONSerialization.data(withJSONObject: ["rules": live.liveRules,
                                                                  "prompts": prompts,
                                                                  "socket_path": socketPath,
                                                                  "ask_unknown_processes": configuration.askUnknownProcesses,
+                                                                 "prompt_bypass_domains": enabledDomains.filter { !$0.normalizedPattern.hasPrefix("*.") }.map(\.normalizedPattern),
+                                                                 "prompt_bypass_domain_suffixes": enabledDomains.filter { $0.normalizedPattern.hasPrefix("*.") }.map { String($0.normalizedPattern.dropFirst()) },
                                                                  "known_process_paths": Array(Set(knownCommandPaths)).sorted(),
                                                                  "known_process_path_regex": Array(Set(knownAppPatterns)).sorted()],
                                                 options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
@@ -95,8 +106,6 @@ enum SingBoxConfigurationGenerator {
             appsByOutbound[tag, default: []].append(app)
         }
 
-        let probeEndpoints = allProbeEndpoints(for: configuration)
-
         var outbounds = root["outbounds"] as? [[String: Any]] ?? []
         outbounds.removeAll { ($0["tag"] as? String) == localDirectTag }
         let connectedNetworks = Array(Set(localNetworks)).sorted {
@@ -121,6 +130,7 @@ enum SingBoxConfigurationGenerator {
         // mixed/socks/http and other inbounds intact.
         inbounds.removeAll {
             ($0["type"] as? String) == "tun" || ($0["tag"] as? String) == managedInboundTag
+                || (($0["tag"] as? String)?.hasPrefix("ipinformer-probe-") == true)
         }
         inbounds.insert([
             "type": "tun",
@@ -131,14 +141,6 @@ enum SingBoxConfigurationGenerator {
             "strict_route": true,
             "dns_mode": "hijack"
         ], at: 0)
-        for endpoint in probeEndpoints {
-            inbounds.append([
-                "type": "socks",
-                "tag": endpoint.inboundTag,
-                "listen": "127.0.0.1",
-                "listen_port": endpoint.port
-            ])
-        }
         inbounds.append([
             "type": "socks", "tag": updaterInboundTag,
             "listen": "127.0.0.1", "listen_port": updaterPort
@@ -146,7 +148,9 @@ enum SingBoxConfigurationGenerator {
         root["inbounds"] = inbounds
 
         var route = root["route"] as? [String: Any] ?? [:]
-        let originalRules = route["rules"] as? [[String: Any]] ?? []
+        let originalRules = (route["rules"] as? [[String: Any]] ?? []).filter { rule in
+            !(rule["inbound"] as? [String] ?? []).contains { $0.hasPrefix("ipinformer-probe-") }
+        }
         let infrastructureRules = originalRules.filter {
             guard let action = $0["action"] as? String else { return false }
             return action == "hijack-dns" || action == "sniff"
@@ -177,22 +181,17 @@ enum SingBoxConfigurationGenerator {
                 "outbound": tag
             ]
         }
-        let webKitRules: [[String: Any]]
-        if configuration.webKitProxyEnabled {
-            guard availableTags.contains("proxy") else { throw RoutingConfigurationError.unknownOutbound("proxy") }
-            webKitRules = [[
-                "inbound": [managedInboundTag],
-                "process_name": ["com.apple.WebKit.Networking"],
-                "action": "route", "outbound": "proxy"
-            ]]
-        } else {
-            webKitRules = []
-        }
+        let webKitRules = try webKitRules(configuration: configuration,
+                                         availableTags: availableTags, localNetworks: connectedNetworks)
         let redirects = try redirectRules(
             configuration: configuration, enabledApps: enabledApps,
             localNetworks: connectedNetworks
         )
         let commandRules = try commandRules(
+            configuration: configuration, availableTags: availableTags,
+            localNetworks: connectedNetworks
+        )
+        let savedProcessRules = try savedProcessRules(
             configuration: configuration, availableTags: availableTags,
             localNetworks: connectedNetworks
         )
@@ -207,13 +206,7 @@ enum SingBoxConfigurationGenerator {
             additionalLocalApps: localAccessApps,
             localNetworks: connectedNetworks
         )
-        let probeRules: [[String: Any]] = probeEndpoints.map { endpoint in
-            [
-                "inbound": [endpoint.inboundTag],
-                "action": "route",
-                "outbound": endpoint.outboundTag
-            ]
-        }
+        let domainRules = try domainRouteRules(configuration.domainRules, availableTags: availableTags)
         let updaterOutbound = availableTags.contains("proxy")
             ? "proxy" : ((route["final"] as? String).flatMap { availableTags.contains($0) ? $0 : nil }
                 ?? availableTags.sorted().first ?? "")
@@ -224,11 +217,18 @@ enum SingBoxConfigurationGenerator {
             ["inbound": [managedInboundTag], "ip_version": 6, "port": [53], "action": "hijack-dns"],
             ["ip_version": 6, "action": "reject"]
         ]
-        let liveRules = ipv6Rules + updaterRule + probeRules
+        let liveRules = ipv6Rules + updaterRule
+            + (domainRules.isEmpty ? [] : [
+                ["action": "sniff"],
+                ["protocol": "dns", "action": "hijack-dns"],
+                ["port": 53, "action": "hijack-dns"]
+            ])
             + (ancestorMatching ? redirects.map(withAncestorMatching) : redirects)
-            + childRules
-            + commandRules
             + (ancestorMatching ? localRules.map(withAncestorMatching) : localRules)
+            + domainRules
+            + childRules
+            + savedProcessRules
+            + commandRules
             + webKitRules
             + (ancestorMatching ? managedRules.map(withAncestorMatching) : managedRules)
         route["rules"] = liveRules + infrastructureRules + defaultRules + originalRules
@@ -260,6 +260,54 @@ enum SingBoxConfigurationGenerator {
         try outboundTags(in: parseRoot(json)).sorted()
     }
 
+    private static func webKitRules(
+        configuration: RoutingConfiguration,
+        availableTags: Set<String>,
+        localNetworks: [LocalIPv4Network]
+    ) throws -> [[String: Any]] {
+        let profile: RoutingProfile
+        if let id = configuration.webKitProfileID {
+            guard let selected = configuration.profiles.first(where: { $0.id == id }) else {
+                throw RoutingConfigurationError.missingProfile("WebKit")
+            }
+            profile = selected
+        } else if configuration.webKitProxyEnabled {
+            profile = configuration.profiles.first(where: { $0.kind == .outbound && $0.outboundTag == "proxy" })
+                ?? RoutingProfile(name: "proxy", outboundTag: "proxy")
+        } else {
+            return []
+        }
+        let condition: [String: Any] = [
+            "inbound": [managedInboundTag],
+            "process_name": ["com.apple.WebKit.Networking"]
+        ]
+        func route(_ extra: [String: Any]) -> [String: Any] {
+            condition.merging(extra) { _, new in new }
+        }
+        switch profile.kind {
+        case .outbound:
+            let tag = profile.outboundTag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard availableTags.contains(tag) else { throw RoutingConfigurationError.unknownOutbound(tag) }
+            return [route(["action": "route", "outbound": tag])]
+        case .block:
+            return [route(["action": "reject"])]
+        case .localOnly:
+            return [
+                route(["ip_cidr": ["127.0.0.0/8"], "action": "route", "outbound": localDirectTag]),
+                route(["action": "reject"])
+            ]
+        case .localNetwork:
+            var rules = localNetworks.map { network in
+                route(["ip_cidr": [network.cidr], "action": "route", "outbound": network.outboundTag])
+            }
+            rules.append(route(["ip_cidr": ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
+                                               "192.168.0.0/16", "169.254.0.0/16", "224.0.0.251/32"],
+                                "action": "route", "outbound": localDirectTag]))
+            rules.append(route(["action": "reject"]))
+            return rules
+        }
+    }
+
     static func defaultRoute(for configuration: RoutingConfiguration) -> DefaultRoute {
         if let selected = configuration.defaultRoute { return selected }
         guard let root = try? parseRoot(configuration.mainConfigurationJSON) else { return .outbound("") }
@@ -268,29 +316,22 @@ enum SingBoxConfigurationGenerator {
         return .outbound(final ?? tags.sorted().first ?? "")
     }
 
-    static func probeEndpoints(for configuration: RoutingConfiguration) -> [RouteProbeEndpoint] {
-        var tags = Set<String>()
-        let availableTags = Set((try? outboundTags(in: configuration.mainConfigurationJSON)) ?? [])
-        for app in configuration.applications {
-            let tag: String
-            if let profileID = effectiveProfileID(for: app, configuration: configuration),
-               let profile = configuration.profiles.first(where: { $0.id == profileID }) {
-                guard profile.kind == .outbound else { continue }
-                tag = profile.outboundTag.trimmingCharacters(in: .whitespacesAndNewlines)
-            } else if effectiveProfileID(for: app, configuration: configuration) == nil,
-                      case .outbound(let defaultTag) = defaultRoute(for: configuration) {
-                tag = defaultTag.trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                continue
+    static func domainRouteRules(_ entries: [DomainRouteRule], availableTags: Set<String>) throws -> [[String: Any]] {
+        let enabled = entries.enumerated().filter { $0.element.enabled }
+            .sorted { left, right in
+                let leftLength = left.element.normalizedPattern.count
+                let rightLength = right.element.normalizedPattern.count
+                return leftLength == rightLength ? left.offset < right.offset : leftLength > rightLength
             }
-            if availableTags.contains(tag) { tags.insert(tag) }
+        return try enabled.map { _, entry in
+            guard availableTags.contains(entry.outboundTag) else {
+                throw RoutingConfigurationError.unknownOutbound(entry.outboundTag)
+            }
+            var rule = try entry.matchFields()
+            rule["action"] = "route"
+            rule["outbound"] = entry.outboundTag
+            return rule
         }
-        return allProbeEndpoints(for: configuration).filter { tags.contains($0.outboundTag) }
-    }
-
-    private static func allProbeEndpoints(for configuration: RoutingConfiguration) -> [RouteProbeEndpoint] {
-        let availableTags = Set((try? outboundTags(in: configuration.mainConfigurationJSON)) ?? [])
-        return probeEndpoints(forOutboundTags: availableTags)
     }
 
     private static func redirectRules(
@@ -372,6 +413,74 @@ enum SingBoxConfigurationGenerator {
         }
         if !blockedApps.isEmpty {
             rules.append(["process_path_regex": patterns(blockedApps), "action": "reject"])
+        }
+        return rules
+    }
+
+    private static func savedProcessRules(
+        configuration: RoutingConfiguration,
+        availableTags: Set<String>,
+        localNetworks: [LocalIPv4Network]
+    ) throws -> [[String: Any]] {
+        var rules: [[String: Any]] = []
+        let privateIPv4 = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
+                           "192.168.0.0/16", "169.254.0.0/16", "224.0.0.251/32"]
+        for choice in configuration.savedProcessRoutes where choice.enabled {
+            let url = URL(fileURLWithPath: choice.executablePath).standardizedFileURL
+            guard url.path.hasPrefix("/"), !url.path.contains("\n") else {
+                throw RoutingConfigurationError.noExecutable(choice.executablePath)
+            }
+            let paths = Array(Set([url.path, url.resolvingSymlinksInPath().path])).sorted()
+            let process: [String: Any] = ["process_path": paths]
+            var route = choice.route
+            var localNetworkOnly = false
+            var allowPrivateIPv4 = route != .localOnly
+            if let groupID = choice.groupID,
+               let group = configuration.groups.first(where: { $0.id == groupID }) {
+                if let profileID = group.profileID,
+                   let profile = configuration.profiles.first(where: { $0.id == profileID }) {
+                    switch profile.kind {
+                    case .outbound:
+                        route = .outbound(profile.outboundTag)
+                        allowPrivateIPv4 = true
+                    case .block:
+                        route = .block
+                        allowPrivateIPv4 = false
+                    case .localOnly:
+                        route = .localOnly
+                        allowPrivateIPv4 = false
+                    case .localNetwork:
+                        localNetworkOnly = true
+                        allowPrivateIPv4 = true
+                    }
+                } else {
+                    route = defaultRoute(for: configuration)
+                    allowPrivateIPv4 = route != .localOnly
+                }
+            }
+            if allowPrivateIPv4 {
+                for network in localNetworks {
+                    rules.append(process.merging(["ip_cidr": [network.cidr], "action": "route",
+                                                  "outbound": network.outboundTag]) { _, new in new })
+                }
+                rules.append(process.merging(["ip_cidr": privateIPv4, "action": "route",
+                                              "outbound": localDirectTag]) { _, new in new })
+            }
+            if localNetworkOnly {
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+                continue
+            }
+            switch route {
+            case .outbound(let tag):
+                guard availableTags.contains(tag) else { throw RoutingConfigurationError.unknownOutbound(tag) }
+                rules.append(process.merging(["action": "route", "outbound": tag]) { _, new in new })
+            case .localOnly:
+                rules.append(process.merging(["ip_cidr": ["127.0.0.0/8"], "action": "route",
+                                              "outbound": localDirectTag]) { _, new in new })
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+            case .block:
+                rules.append(process.merging(["action": "reject"]) { _, new in new })
+            }
         }
         return rules
     }
@@ -494,16 +603,6 @@ enum SingBoxConfigurationGenerator {
         let parts = value.split(separator: ".").compactMap { Int($0) }
         guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
         return parts[0] == 127 || parts[0] == 10 || (parts[0] == 172 && (16...31).contains(parts[1])) || (parts[0] == 192 && parts[1] == 168) || (parts[0] == 169 && parts[1] == 254)
-    }
-
-    private static func probeEndpoints(forOutboundTags tags: Set<String>) -> [RouteProbeEndpoint] {
-        tags.sorted().enumerated().map { index, tag in
-            RouteProbeEndpoint(
-                outboundTag: tag,
-                inboundTag: "ipinformer-probe-\(index)",
-                port: 39_000 + index
-            )
-        }
     }
 
     static func effectiveProfileID(for app: RoutedApplication, configuration: RoutingConfiguration) -> UUID? {

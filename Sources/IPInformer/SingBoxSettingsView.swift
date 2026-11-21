@@ -19,15 +19,10 @@ extension Notification.Name {
 
 struct SingBoxSettingsView: View {
     @ObservedObject var store: RoutingStore
-    @ObservedObject var monitor: IPMonitor
     @StateObject private var engine = EngineManager()
-    @State private var draft = ""
-    @State private var draftBaseline = ""
-    @State private var editorExpanded = false
-    @State private var manualCheckMessage: String?
+    @StateObject private var service = NetworkServiceManager()
     @State private var diffCandidate = ""
-    @State private var diffIsHistory = false
-    @State private var showDiff = false
+    @State private var showHistoryDiff = false
     @State private var archiveMode: ArchiveMode?
     @State private var password = ""
     @State private var passwordConfirmation = ""
@@ -41,6 +36,14 @@ struct SingBoxSettingsView: View {
     @State private var connectionJSONError: String?
     @State private var connectionToRemove: ClientConnection?
     @State private var connectionToShare: ClientConnection?
+    @State private var connectionToInspect: ClientConnection?
+    @State private var pendingInstallations: [PendingServerInstallation] = []
+    @State private var pendingToComplete: PendingServerInstallation?
+    @State private var showServiceRemovalConfirmation = false
+    @State private var showServiceLog = false
+    @State private var showMigrationDiff = false
+    @State private var migrationError: String?
+    @State private var migrationReplacementTag = "direct"
 
     var body: some View {
         ScrollView {
@@ -51,7 +54,8 @@ struct SingBoxSettingsView: View {
                 Divider()
                 clientConnectionsSection
                 Divider()
-                editorSection
+                serverMigrationSection
+                generatedConfigurationSection
                 Divider()
                 historySection
                 Divider()
@@ -60,44 +64,39 @@ struct SingBoxSettingsView: View {
             .padding(20)
         }
         .onAppear {
-            editorExpanded = false
-            if draft.isEmpty {
-                draft = store.configuration.mainConfigurationJSON
-                draftBaseline = draft
-            }
             engine.refreshLocalState()
+            pendingInstallations = PendingServerInstallationStore.all()
             Task { await engine.refreshReleases() }
         }
-        .onChange(of: store.configuration.mainConfigurationJSON) { updated in
-            if draft == draftBaseline { draft = updated }
-            draftBaseline = updated
-            manualCheckMessage = nil
-        }
-        .onChange(of: store.configuration) { _ in manualCheckMessage = nil }
-        .onChange(of: store.validationMessage) { _ in manualCheckMessage = nil }
         .task {
             while !Task.isCancelled {
                 engine.refreshLocalState()
+                await service.refresh()
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
             }
         }
-        .sheet(isPresented: $showDiff) {
-            ConfigurationDiffView(
-                store: store,
-                old: store.configuration.mainConfigurationJSON, new: diffCandidate,
-                title: "Изменения основной конфигурации",
-                actionTitle: diffIsHistory ? "Восстановить версию" : "Проверить и сохранить"
-            ) {
-                let saved = store.applyMainConfigurationJSON(diffCandidate)
-                if saved {
-                    draft = store.configuration.mainConfigurationJSON
-                    showDiff = false
-                }
-                return saved
-            }
+        .sheet(isPresented: $showHistoryDiff) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Configuration history diff").font(.headline)
+                    ForEach(ConfigurationDiff.lines(old: diffCandidate, new: store.configuration.mainConfigurationJSON)) { line in
+                        Text("\(line.marker) \(line.text)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(line.marker == "+" ? .green : line.marker == "-" ? .red : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.padding()
+            }.frame(width: 780, height: 550)
         }
         .sheet(item: $archiveMode) { mode in archiveSheet(mode) }
-        .sheet(isPresented: $showNewServerWizard) { NewServerWizardView(store: store) }
+        .sheet(isPresented: $showNewServerWizard) {
+            NewServerWizardView(store: store)
+                .onDisappear { pendingInstallations = PendingServerInstallationStore.all() }
+        }
+        .sheet(item: $pendingToComplete) { pending in
+            PendingServerCompletionView(store: store, pending: pending)
+                .onDisappear { pendingInstallations = PendingServerInstallationStore.all() }
+        }
         .sheet(item: $displayedConnectionConfig) { item in
             VStack(alignment: .leading, spacing: 8) {
                 Text(item.title).font(.headline)
@@ -113,18 +112,86 @@ struct SingBoxSettingsView: View {
             ClientRemovalView(store: store, connection: connection)
         }
         .sheet(item: $connectionToShare) { connection in
-            ClientQRSView(connection: connection, mainJSON: store.configuration.mainConfigurationJSON)
+            ClientQRSView(connection: connection, mainJSON: store.configuration.mainConfigurationJSON,
+                          domainRules: store.configuration.domainRules)
+        }
+        .sheet(item: $connectionToInspect) { connection in
+            ServerInstallationView(store: store, connection: connection)
+        }
+        .sheet(isPresented: $showServiceLog) {
+            ScrollView { Text(service.log).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding() }
+                .frame(width: 780, height: 500)
+        }
+        .sheet(isPresented: $showMigrationDiff) {
+            ConfigurationDiffView(store: store, old: store.configuration.mainConfigurationJSON,
+                                  new: diffCandidate, title: "Replace legacy JSON with saved servers",
+                                  actionTitle: "Use saved servers") {
+                do {
+                    try store.adoptSavedServerConfiguration(
+                        replacementTag: store.serverConfigurationMigration.unresolvedRoutes.isEmpty
+                            ? nil : migrationReplacementTag
+                    )
+                    showMigrationDiff = false
+                    migrationError = nil
+                    return true
+                } catch {
+                    migrationError = error.localizedDescription
+                    return false
+                }
+            }
+        }
+        .confirmationDialog("Remove IP Informer network and updater services?", isPresented: $showServiceRemovalConfirmation) {
+            Button("Remove services", role: .destructive) { Task { await service.remove() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The services and IP Informer PF rules will be removed. Saved servers, profiles and sing-box binaries remain.")
         }
     }
 
     private var serviceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Сетевой движок").font(.headline)
-            Toggle("Sing-box всегда активен", isOn: Binding(
-                get: { store.configuration.singBoxAlwaysOn },
-                set: { store.setAlwaysOn($0) }
-            ))
-            Text(store.validationMessage).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text("IP Informer network service").font(.headline)
+                Spacer()
+                Button("Refresh status") { Task { await service.refresh() } }.disabled(service.busy)
+            }
+            let state = service.snapshot
+            Label(state.networkHealthy ? "Running · IP Informer controls sing-box" :
+                    state.networkInstalled ? "Installed · not fully running" : "Not installed",
+                  systemImage: state.networkHealthy ? "checkmark.circle.fill" : "exclamationmark.triangle")
+                .foregroundStyle(state.networkHealthy ? .green : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(format: AppLanguage.localized("launchd: %@"),
+                            AppLanguage.localized(state.networkLoaded ? "loaded" : "not loaded")))
+                Text(String(format: AppLanguage.localized("Supervisor PID: %@"),
+                            state.supervisorPID.map { String($0) } ?? AppLanguage.localized("not found")))
+                Text(String(format: AppLanguage.localized("Managed sing-box PID: %@"),
+                            state.managedEnginePID.map { String($0) } ?? AppLanguage.localized("not found")))
+                Text(String(format: AppLanguage.localized("utun100: %@"),
+                            AppLanguage.localized(state.tunnelReady ? "ready" : "missing")))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            Text("Updater service: \(state.updaterInstalled ? (state.updaterLoaded ? "installed and loaded" : "installed, not loaded") : "not installed")")
+                .font(.caption)
+            if let path = state.configurationPath { Text("Installed service config: \(path)").font(.caption.monospaced()).textSelection(.enabled) }
+            if !state.externalEngines.isEmpty {
+                Text("Other sing-box processes (IP Informer does not control their routes):").font(.caption).foregroundStyle(.orange)
+                ForEach(state.externalEngines, id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) }
+            }
+            HStack {
+                Button(state.networkInstalled ? "Reinstall services" : "Install services") { Task { await service.install() } }
+                    .disabled(service.busy || !state.externalEngines.isEmpty)
+                Button("Restart network service") { Task { await service.restart() } }
+                    .disabled(service.busy || !state.networkLoaded)
+                Button("Remove services", role: .destructive) { showServiceRemovalConfirmation = true }
+                    .disabled(service.busy || (!state.networkInstalled && !state.updaterInstalled))
+                Button("Network log") { Task { await service.loadLog(); showServiceLog = true } }
+            }
+            if service.busy { ProgressView("Updating service…") }
+            if !service.message.isEmpty { Text(service.message).font(.caption).textSelection(.enabled) }
+            Text(LocalizedStringKey(store.validationMessage)).font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -134,29 +201,29 @@ struct SingBoxSettingsView: View {
                 Text("Версия sing-box").font(.headline)
                 Spacer()
                 Button("Обновить список") { Task { await engine.refreshReleases() } }
-                Button("Вернуть предыдущую") { Task { await engine.rollback() } }
+                Button("Вернуть предыдущую") { Task { await engine.rollback(); await service.refresh() } }
                     .disabled(!engine.canRollback || engine.isInstalling)
             }
             Text(engine.isPatched ? "Работает: sing-box 1.14.4 · патч IP Informer 1.14.4-\(engine.activePatchRevision ?? 0)" :
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.isPatched && engine.activePatchRevision != 4
-                     ? "Patch 1.14.4-4 keeps route prompts open and blocks a timed-out first connection."
+                Text(engine.isPatched && engine.activePatchRevision != 5
+                     ? "Patch 1.14.4-6 keeps route prompts open and applies saved process route changes immediately."
                      : engine.isPatched
-                       ? "Patch 1.14.4-4 active · route prompts stay open until you choose."
-                       : "Patch 1.14.4-4 adds live rules and persistent route prompts.")
+                       ? "Patch 1.14.4-6 active · route prompts stay open until you choose."
+                       : "Patch 1.14.4-6 adds live rules and persistent route prompts.")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
-                    if engine.activePatchRevision != 4 {
-                        Button("Update patch") { Task { await engine.installPatch() } }
+                    if engine.activePatchRevision != 5 {
+                        Button("Update patch") { Task { await engine.installPatch(); await service.refresh() } }
                             .disabled(engine.isInstalling)
                     }
-                    Button("Вернуть официальный") { Task { await engine.removePatch() } }
+                    Button("Вернуть официальный") { Task { await engine.removePatch(); await service.refresh() } }
                         .disabled(engine.isInstalling)
                 } else {
-                    Button("Установить патч") { Task { await engine.installPatch() } }
+                    Button("Установить патч") { Task { await engine.installPatch(); await service.refresh() } }
                         .disabled(engine.isInstalling)
                 }
             }
@@ -176,7 +243,7 @@ struct SingBoxSettingsView: View {
                 }
                 .frame(width: 285)
                 Button(engine.activeVersion == nil ? "Установить" : "Переключить") {
-                    Task { await engine.installSelected() }
+                    Task { await engine.installSelected(); await service.refresh() }
                 }
                 .disabled(engine.isInstalling || engine.isPatched || !engine.selectableReleases.contains(where: { $0.version == engine.selectedVersion }))
                 Button("Проверить") { Task { await engine.checkSelected() } }
@@ -241,12 +308,30 @@ struct SingBoxSettingsView: View {
             if let connectionJSONError {
                 Text(connectionJSONError).font(.caption).foregroundStyle(.red)
             }
+            if !pendingInstallations.isEmpty {
+                Text("Pending manual installations").font(.subheadline.weight(.semibold))
+                ForEach(pendingInstallations) { pending in
+                    HStack {
+                        Text("\(pending.name) · \(pending.serverIPv4) · sing-box \(pending.version)")
+                            .font(.caption)
+                        Spacer()
+                        Button("Complete installation…") { pendingToComplete = pending }
+                        Button("Discard", role: .destructive) {
+                            PendingServerInstallationStore.remove(pending.id)
+                            pendingInstallations = PendingServerInstallationStore.all()
+                        }
+                    }
+                }
+            }
             ForEach(store.configuration.clientConnections) { connection in
                 HStack {
                     VStack(alignment: .leading) {
                         Text(connection.name).fontWeight(.medium)
                         Text("\(connection.protocolName) · \(connection.serverIPv4) · \(connection.outboundTag)")
                             .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Text(AppLanguage.localized(connection.installationVerified == true ? "Verified on VPS" :
+                             (connection.installationVerified == false ? "Installation not verified" : "Installation not checked")))
+                            .font(.caption).foregroundStyle(connection.installationVerified == true ? Color.green : Color.secondary)
                     }
                     Spacer()
                     if store.configuration.defaultRoute == .outbound(connection.outboundTag) {
@@ -259,7 +344,8 @@ struct SingBoxSettingsView: View {
                         do {
                             let json = try ClientQRS.androidConfiguration(
                                 connection: connection,
-                                mainJSON: store.configuration.mainConfigurationJSON
+                                mainJSON: store.configuration.mainConfigurationJSON,
+                                domainRules: store.configuration.domainRules
                             )
                             displayedConnectionConfig = ConnectionConfigDisplay(
                                 title: "Клиентский JSON · \(connection.name)", json: json
@@ -276,6 +362,7 @@ struct SingBoxSettingsView: View {
                         connectionJSONError = displayedConnectionConfig == nil
                             ? "Серверный конфиг не найден в Keychain" : nil
                     }
+                    Button("Installation / Check…") { connectionToInspect = connection }
                     Button("Удалить…", role: .destructive) { connectionToRemove = connection }
                 }
                 .padding(8)
@@ -284,66 +371,83 @@ struct SingBoxSettingsView: View {
         }
     }
 
-    private var editorSection: some View {
-        DisclosureGroup(isExpanded: $editorExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Здесь находятся DNS, outbounds и общие правила. Перед сохранением показываются изменения; успешная версия попадает в историю.")
-                    .font(.caption).foregroundStyle(.secondary)
-                TextEditor(text: $draft)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(minHeight: 230)
-                    .border(Color.secondary.opacity(0.25))
-                HStack {
-                    Text("Outbounds: \(store.outboundTags.joined(separator: ", "))")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    Button("Проверить через sing-box") {
-                        store.validateWithInstalledSingBox()
-                        manualCheckMessage = store.runtimeMessage
+    private var serverMigrationSection: some View {
+        Group {
+            if !store.configuration.usesManagedServerConfiguration {
+                let report = store.serverConfigurationMigration
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Move from legacy JSON to saved servers").font(.headline)
+                    Text("IP Informer has preserved the current configuration. Reassign unavailable routes before generating a new one from saved server connections.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !report.unmanagedTags.isEmpty {
+                        Text("Channels that will be removed: \(report.unmanagedTags.joined(separator: ", "))")
+                            .font(.caption.monospaced()).foregroundStyle(.orange)
                     }
-                    .help("Проверяет сохранённую итоговую конфигурацию, включая правила программ")
+                    ForEach(report.unresolvedRoutes, id: \.self) { reference in
+                        Text(reference).font(.caption.monospaced()).foregroundStyle(.orange)
+                    }
+                    if !report.unresolvedRoutes.isEmpty {
+                        Picker("Replace unavailable routes with", selection: $migrationReplacementTag) {
+                            Text("direct").tag("direct")
+                            ForEach(store.configuration.clientConnections.filter { $0.outboundJSON != nil }) { connection in
+                                Text(connection.name).tag(connection.outboundTag)
+                            }
+                        }
+                        .frame(maxWidth: 360)
+                        Text("The listed profiles, child commands, saved processes and legacy WebKit choice will use this route when their old channel is removed.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(store.configuration.clientConnections.filter { $0.outboundJSON == nil }) { connection in
+                        HStack {
+                            Text("Missing client outbound: \(connection.name)").font(.caption)
+                            Button("Load client outbound JSON…") { chooseClientOutbound(for: connection) }
+                        }
+                    }
+                    Button("Review generated configuration") {
+                        do {
+                            diffCandidate = try store.previewManagedServerConfiguration()
+                            migrationError = nil
+                            showMigrationDiff = true
+                        } catch { migrationError = error.localizedDescription }
+                    }
+                    .disabled(!report.missingConnections.isEmpty)
+                    if let migrationError { Text(migrationError).font(.caption).foregroundStyle(.red) }
                 }
-                HStack {
-                    Spacer()
-                    Button("Вернуть сохранённую") {
-                        draft = store.configuration.mainConfigurationJSON
-                        draftBaseline = draft
-                    }
-                    Button("Загрузить JSON…") { chooseJSON() }
-                    Button("Сравнить и сохранить") {
-                        diffCandidate = draft
-                        diffIsHistory = false
-                        showDiff = true
-                    }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(draft == store.configuration.mainConfigurationJSON)
-                }
-            }
-            .padding(.top, 8)
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Основная конфигурация sing-box").font(.headline)
-                Label(editorStatus,
-                      systemImage: editorStatusPassed ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundColor(editorStatusPassed ? Color.secondary : Color.red)
+                .padding(10)
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }
 
-    private var editorStatus: String { manualCheckMessage ?? store.validationMessage }
+    private var generatedConfigurationSection: some View {
+        HStack {
+            Text("Generated sing-box configuration").font(.subheadline.weight(.semibold))
+            Spacer()
+            Button("View JSON") {
+                let json = (try? String(contentsOfFile: store.generatedConfigPath, encoding: .utf8))
+                    ?? store.configuration.mainConfigurationJSON
+                displayedConnectionConfig = ConnectionConfigDisplay(title: "Generated sing-box JSON", json: json)
+            }
+            Button("Check with sing-box") { store.validateWithInstalledSingBox() }
+        }
+    }
 
-    private var editorStatusPassed: Bool {
-        if let manualCheckMessage { return manualCheckMessage == "sing-box: конфигурация корректна" }
-        return store.validationMessage.hasPrefix("Конфигурация готова")
+    private func chooseClientOutbound(for connection: ClientConnection) {
+        let panel = NSOpenPanel()
+        panel.title = "Select client outbound JSON for \(connection.name)"
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let json = try String(contentsOf: url, encoding: .utf8)
+            try store.restoreClientOutbound(connection.id, json: json)
+            migrationError = nil
+        } catch { migrationError = error.localizedDescription }
     }
 
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("История конфигурации").font(.headline)
-            Text("Хранятся 30 последних успешно сохранённых версий на этом Mac. Восстановление сначала откроет сравнение.")
+            Text("Saved configuration snapshots can be compared with the current generated JSON. Restore a complete encrypted backup to recover old server connections.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(store.configurationHistory) { revision in
                 HStack {
@@ -354,8 +458,7 @@ struct SingBoxSettingsView: View {
                     Spacer()
                     Button("Посмотреть") {
                         diffCandidate = revision.json
-                        diffIsHistory = true
-                        showDiff = true
+                        showHistoryDiff = true
                     }
                     .disabled(revision.json == store.configuration.mainConfigurationJSON)
                 }
@@ -369,23 +472,13 @@ struct SingBoxSettingsView: View {
     private var archiveSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Перенос на другой Mac").font(.headline)
-            Text("Архив включает маршруты, профили, группы, программы, источники IP и настройки виджетов. Приложения и системная служба в архив не входят.")
+            Text("The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Экспортировать с паролем…") { beginArchive(.export) }
                 Button("Восстановить из архива…") { beginArchive(.restore) }
             }
         }
-    }
-
-    private func chooseJSON() {
-        let panel = NSOpenPanel()
-        panel.title = "Загрузить JSON sing-box для сравнения"
-        panel.allowedContentTypes = [.json]
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { draft = try String(contentsOf: url, encoding: .utf8) }
-        catch { store.reportRuntimeError("Не удалось прочитать JSON: \(error.localizedDescription)") }
     }
 
     private func beginArchive(_ mode: ArchiveMode) {
@@ -401,7 +494,7 @@ struct SingBoxSettingsView: View {
 
     private func archiveSheet(_ mode: ArchiveMode) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(mode == .export ? "Зашифрованный экспорт" : "Восстановление из архива")
+            Text(LocalizedStringKey(mode == .export ? "Зашифрованный экспорт" : "Восстановление из архива"))
                 .font(.title3.weight(.semibold))
             if mode == .restore {
                 Button(archiveName.isEmpty ? "Выбрать архив…" : archiveName) { chooseArchive() }
@@ -416,7 +509,14 @@ struct SingBoxSettingsView: View {
                 Text(archiveError).foregroundStyle(.red).font(.caption)
             }
             if mode == .restore, let pendingBackup {
-                Text("Профилей: \(pendingBackup.routing.profiles.count), групп: \(pendingBackup.routing.groups.count), программ: \(pendingBackup.routing.applications.count), источников IP: \(pendingBackup.sources.count)")
+                Text(String(format: AppLanguage.localized("Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld"),
+                            pendingBackup.routing.profiles.count, pendingBackup.routing.groups.count,
+                            pendingBackup.routing.applications.count, pendingBackup.routing.commands.count,
+                            pendingBackup.routing.savedProcessRoutes.count,
+                            pendingBackup.routing.clientConnections.count))
+                    .font(.caption)
+                Text(String(format: AppLanguage.localized("Pending VPS installations: %ld"),
+                            pendingBackup.pendingServerInstallations?.count ?? 0))
                     .font(.caption)
                 if !missingApplications.isEmpty {
                     Text("Не найдены и будут выключены: \(missingApplications.joined(separator: ", "))")
@@ -448,7 +548,7 @@ struct SingBoxSettingsView: View {
 
     private func chooseArchive() {
         let panel = NSOpenPanel()
-        panel.title = "Выберите зашифрованный архив IP Informer"
+        panel.title = AppLanguage.localized("Выберите зашифрованный архив IP Informer")
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -473,27 +573,24 @@ struct SingBoxSettingsView: View {
 
     private func exportArchive() {
         guard password == passwordConfirmation else {
-            archiveError = "Пароли не совпадают"
+            archiveError = AppLanguage.localized("Пароли не совпадают")
             return
         }
-        let defaults = UserDefaults.standard
-        let offsets = defaults.dictionaryRepresentation().compactMapValues { $0 as? String }
-            .filter { $0.key.hasPrefix("widgetOffset.") }
-        let backup = ConfigurationBackup(
-            routing: store.configuration, sources: monitor.sources,
-            checkInterval: monitor.interval,
-            widgetsVisible: defaults.object(forKey: "widgetsVisible") == nil || defaults.bool(forKey: "widgetsVisible"),
-            widgetOffsets: offsets,
-            launchAtLogin: SMAppService.mainApp.status == .enabled,
-            configurationHistory: store.configurationHistory,
-            engineAutoInstall: engine.autoInstall,
-            serverConfigurations: ServerSecretStore.all(for: store.configuration.clientConnections),
-            processAISettings: ProcessAISettings.shared.snapshot()
-        )
         do {
+            let defaults = UserDefaults.standard
+            let backup = ConfigurationBackup(
+                routing: store.configuration,
+                launchAtLogin: SMAppService.mainApp.status == .enabled,
+                configurationHistory: store.configurationHistory,
+                engineAutoInstall: engine.autoInstall,
+                serverConfigurations: try ServerSecretStore.allRequired(for: store.configuration.clientConnections),
+                processAISettings: try ProcessAISettings.shared.snapshot(),
+                preferredAppLanguage: defaults.string(forKey: AppLanguage.preferenceKey),
+                pendingServerInstallations: try PendingServerInstallationStore.allChecked()
+            )
             let encrypted = try ConfigurationArchive.encrypt(backup, password: password)
             let panel = NSSavePanel()
-            panel.title = "Сохранить зашифрованный архив"
+            panel.title = AppLanguage.localized("Сохранить зашифрованный архив")
             panel.nameFieldStringValue = "IPInformer.ipibackup"
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try encrypted.write(to: url, options: .atomic)
@@ -505,24 +602,13 @@ struct SingBoxSettingsView: View {
     private func restoreArchive() {
         guard let pendingBackup else { return }
         do {
-            missingApplications = try store.restoreConfiguration(
-                pendingBackup.routing, history: pendingBackup.configurationHistory
-            )
-            monitor.restore(sources: pendingBackup.sources, interval: pendingBackup.checkInterval)
+            missingApplications = try applyArchiveTransaction(pendingBackup)
             if let engineAutoInstall = pendingBackup.engineAutoInstall {
                 engine.autoInstall = engineAutoInstall
             }
-            for (id, serverConfig) in pendingBackup.serverConfigurations ?? [:] {
-                if let uuid = UUID(uuidString: id) {
-                    try ServerSecretStore.save(serverConfig, id: uuid)
-                }
+            if let language = pendingBackup.preferredAppLanguage {
+                AppLanguage.set(language)
             }
-            if let aiSettings = pendingBackup.processAISettings {
-                try ProcessAISettings.shared.restore(aiSettings)
-            }
-            let defaults = UserDefaults.standard
-            defaults.set(pendingBackup.widgetsVisible, forKey: "widgetsVisible")
-            for (key, value) in pendingBackup.widgetOffsets { defaults.set(value, forKey: key) }
             var loginIssue: String?
             do {
                 if pendingBackup.launchAtLogin && SMAppService.mainApp.status != .enabled {
@@ -531,13 +617,73 @@ struct SingBoxSettingsView: View {
                     try SMAppService.mainApp.unregister()
                 }
             } catch { loginIssue = error.localizedDescription }
-            draft = store.configuration.mainConfigurationJSON
             archiveMode = nil
             password = ""
+            pendingInstallations = PendingServerInstallationStore.all()
             let suffix = loginIssue.map { " Автозапуск не изменён: \($0)" } ?? ""
             store.reportRuntimeError("Архив восстановлен. Перезапустите IP Informer и установите системную службу.\(suffix)")
             NotificationCenter.default.post(name: .ipInformerConfigurationRestored, object: nil)
         } catch { archiveError = error.localizedDescription }
+    }
+
+    private func applyArchiveTransaction(_ backup: ConfigurationBackup) throws -> [String] {
+        try ConfigurationArchive.validateContents(backup)
+        let priorAI = try backup.processAISettings.map { _ in try ProcessAISettings.shared.snapshot() }
+        let priorPending = try backup.version >= 2 ? PendingServerInstallationStore.allChecked() : nil
+        var incomingSecrets: [UUID: String] = [:]
+        for (rawID, json) in backup.serverConfigurations ?? [:] {
+            guard let id = UUID(uuidString: rawID) else {
+                throw BackupError.incompleteArchive(String(format: AppLanguage.localized("Invalid server ID in archive: %@"), rawID))
+            }
+            incomingSecrets[id] = json
+        }
+        let restoredIDs = Set(backup.routing.clientConnections.map(\.id))
+        let oldIDs = Set(store.configuration.clientConnections.map(\.id))
+        let obsoleteIDs = oldIDs.subtracting(restoredIDs)
+        let touchedIDs = Set(incomingSecrets.keys).union(obsoleteIDs)
+        var priorSecrets: [UUID: String] = [:]
+        for id in touchedIDs {
+            if let json = try ServerSecretStore.loadChecked(id: id) { priorSecrets[id] = json }
+        }
+
+        do {
+            for (id, json) in incomingSecrets { try ServerSecretStore.save(json, id: id) }
+            for id in obsoleteIDs { try ServerSecretStore.deleteChecked(id: id) }
+            if let ai = backup.processAISettings { try ProcessAISettings.shared.restore(ai) }
+            if backup.version >= 2 {
+                try PendingServerInstallationStore.replaceAll(with: backup.pendingServerInstallations ?? [])
+            }
+            return try store.restoreConfiguration(backup.routing, history: backup.configurationHistory)
+        } catch {
+            let originalError = error
+            var rollbackErrors: [String] = []
+            if let priorPending {
+                do { try PendingServerInstallationStore.replaceAll(with: priorPending) }
+                catch { rollbackErrors.append("pending VPS installations: \(error.localizedDescription)") }
+            }
+            if let priorAI {
+                let priorIDs = Set(priorAI.profiles.map(\.id))
+                for profile in backup.processAISettings?.profiles ?? [] where !priorIDs.contains(profile.id) {
+                    do { try ProcessAIKeychain.deleteChecked(id: profile.id) }
+                    catch { rollbackErrors.append("AI key \(profile.id.uuidString): \(error.localizedDescription)") }
+                }
+                do { try ProcessAISettings.shared.restore(priorAI) }
+                catch { rollbackErrors.append("AI settings: \(error.localizedDescription)") }
+            }
+            for id in touchedIDs {
+                do {
+                    if let previous = priorSecrets[id] {
+                        try ServerSecretStore.save(previous, id: id)
+                    } else {
+                        try ServerSecretStore.deleteChecked(id: id)
+                    }
+                } catch { rollbackErrors.append("server \(id.uuidString): \(error.localizedDescription)") }
+            }
+            let detail = rollbackErrors.isEmpty ? "" : String(format: AppLanguage.localized("Rollback errors: %@"),
+                                                                    rollbackErrors.joined(separator: "; "))
+            throw BackupError.incompleteArchive(String(format: AppLanguage.localized("Restore failed: %@. %@"),
+                                                       originalError.localizedDescription, detail))
+        }
     }
 }
 
@@ -570,7 +716,7 @@ private struct ConfigurationDiffView: View {
             }
             .border(Color.secondary.opacity(0.25))
             if store.validationMessage.hasPrefix("Не применено") {
-                Text(store.validationMessage).font(.caption).foregroundStyle(.red)
+                Text(LocalizedStringKey(store.validationMessage)).font(.caption).foregroundStyle(.red)
             }
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.red)

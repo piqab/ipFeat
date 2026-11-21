@@ -3,17 +3,19 @@ import CryptoKit
 import Foundation
 
 struct ConfigurationBackup: Codable {
-    var version = 1
+    var version = 3
     var routing: RoutingConfiguration
-    var sources: [IPSource]
-    var checkInterval: Double
-    var widgetsVisible: Bool
-    var widgetOffsets: [String: String]
+    var sources: [IPSource]? = nil
+    var checkInterval: Double? = nil
+    var widgetsVisible: Bool? = nil
+    var widgetOffsets: [String: String]? = nil
     var launchAtLogin: Bool
     var configurationHistory: [ConfigurationRevision]
     var engineAutoInstall: Bool? = nil
     var serverConfigurations: [String: String]? = nil
     var processAISettings: ProcessAISettingsSnapshot? = nil
+    var preferredAppLanguage: String? = nil
+    var pendingServerInstallations: [PendingServerInstallation]? = nil
 }
 
 private struct EncryptedBackup: Codable {
@@ -30,15 +32,17 @@ enum BackupError: LocalizedError {
     case unsupportedVersion
     case wrongPasswordOrCorrupt
     case keyDerivationFailed
+    case incompleteArchive(String)
 
     var errorDescription: String? {
         switch self {
-        case .passwordRequired: return "Введите пароль архива"
-        case .weakPassword: return "Пароль должен содержать не менее 8 символов"
-        case .invalidArchive: return "Файл не является архивом IP Informer"
-        case .unsupportedVersion: return "Версия архива не поддерживается"
-        case .wrongPasswordOrCorrupt: return "Неверный пароль или архив повреждён"
-        case .keyDerivationFailed: return "Не удалось создать ключ шифрования"
+        case .passwordRequired: return AppLanguage.localized("Введите пароль архива")
+        case .weakPassword: return AppLanguage.localized("Пароль должен содержать не менее 8 символов")
+        case .invalidArchive: return AppLanguage.localized("Файл не является архивом IP Informer")
+        case .unsupportedVersion: return AppLanguage.localized("Версия архива не поддерживается")
+        case .wrongPasswordOrCorrupt: return AppLanguage.localized("Неверный пароль или архив повреждён")
+        case .keyDerivationFailed: return AppLanguage.localized("Не удалось создать ключ шифрования")
+        case .incompleteArchive(let detail): return detail
         }
     }
 }
@@ -49,10 +53,18 @@ enum ConfigurationArchive {
     static func encrypt(_ backup: ConfigurationBackup, password: String) throws -> Data {
         guard !password.isEmpty else { throw BackupError.passwordRequired }
         guard password.count >= 8 else { throw BackupError.weakPassword }
+        var payload = backup
+        if payload.version >= 3 {
+            payload.sources = nil
+            payload.checkInterval = nil
+            payload.widgetsVisible = nil
+            payload.widgetOffsets = nil
+        }
+        try validateContents(payload)
         var random = SystemRandomNumberGenerator()
         let salt = Data((0..<16).map { _ in UInt8.random(in: .min ... .max, using: &random) })
         let key = try deriveKey(password: password, salt: salt)
-        let plaintext = try JSONEncoder().encode(backup)
+        let plaintext = try JSONEncoder().encode(payload)
         let box = try AES.GCM.seal(plaintext, using: key)
         guard let combined = box.combined else { throw BackupError.invalidArchive }
         return try JSONEncoder().encode(EncryptedBackup(salt: salt, sealedData: combined))
@@ -71,8 +83,25 @@ enum ConfigurationArchive {
               let backup = try? JSONDecoder().decode(ConfigurationBackup.self, from: plaintext) else {
             throw BackupError.wrongPasswordOrCorrupt
         }
-        guard backup.version == 1 else { throw BackupError.unsupportedVersion }
+        guard (1...3).contains(backup.version) else { throw BackupError.unsupportedVersion }
+        try validateContents(backup)
         return backup
+    }
+
+    static func validateContents(_ backup: ConfigurationBackup) throws {
+        guard (1...3).contains(backup.version) else { throw BackupError.unsupportedVersion }
+        guard backup.version >= 2 else { return }
+        let secrets = backup.serverConfigurations ?? [:]
+        for connection in backup.routing.clientConnections where secrets[connection.id.uuidString] == nil {
+            throw BackupError.incompleteArchive(String(format: AppLanguage.localized("Missing server JSON for %@ (%@)"),
+                                                       connection.name, connection.id.uuidString))
+        }
+        let pending = backup.pendingServerInstallations ?? []
+        let pendingIDs = pending.map(\.id)
+        guard Set(pendingIDs).count == pendingIDs.count,
+              Set(pendingIDs).isDisjoint(with: Set(backup.routing.clientConnections.map(\.id))) else {
+            throw BackupError.incompleteArchive(AppLanguage.localized("Pending VPS installations conflict with saved connections"))
+        }
     }
 
     private static func deriveKey(password: String, salt: Data) throws -> SymmetricKey {

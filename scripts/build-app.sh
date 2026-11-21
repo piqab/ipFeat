@@ -14,20 +14,31 @@ cp "$ROOT_DIR/.build/release/IPInformer" "$CONTENTS_DIR/MacOS/IPInformer"
 cp "$ROOT_DIR/.build/release/IPInformerUpdater" "$CONTENTS_DIR/MacOS/IPInformerUpdater"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$CONTENTS_DIR/Resources/AppIcon.icns"
+for language in ru en zh-Hans; do
+    mkdir -p "$CONTENTS_DIR/Resources/$language.lproj"
+    cp "$ROOT_DIR/Resources/$language.lproj/Localizable.strings" \
+        "$CONTENTS_DIR/Resources/$language.lproj/Localizable.strings"
+done
 mkdir -p "$CONTENTS_DIR/Resources/scripts"
 cp "$ROOT_DIR/scripts/install-network-service.sh" "$CONTENTS_DIR/Resources/scripts/"
+cp "$ROOT_DIR/scripts/uninstall-network-service.sh" "$CONTENTS_DIR/Resources/scripts/"
 cp "$ROOT_DIR/scripts/install-patched-engine.sh" "$CONTENTS_DIR/Resources/scripts/"
 mkdir -p "$CONTENTS_DIR/Resources/scripts/service"
 cp -R "$ROOT_DIR/scripts/service/." "$CONTENTS_DIR/Resources/scripts/service/"
 chmod +x "$CONTENTS_DIR/Resources/scripts/install-patched-engine.sh"
+chmod +x "$CONTENTS_DIR/Resources/scripts/install-network-service.sh" "$CONTENTS_DIR/Resources/scripts/uninstall-network-service.sh"
 mkdir -p "$CONTENTS_DIR/Resources/engines"
 /bin/rm -f "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-1.sha256" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-2.sha256"
 /bin/rm -f "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3" \
-    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3.sha256"
-PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-4"
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-3.sha256" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-4" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-4.sha256" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-5" \
+    "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-5.sha256"
+PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipinformer-6"
 if [[ -n "${IPINFORMER_PATCHED_BINARY:-}" ]]; then
     cp "$IPINFORMER_PATCHED_BINARY" "$PATCH_BINARY"
 else

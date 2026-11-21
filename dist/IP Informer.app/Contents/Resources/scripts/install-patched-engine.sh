@@ -10,8 +10,8 @@ SCRIPT_DIR="${0:A:h}"
 RESOURCE_DIR="${SCRIPT_DIR:h}"
 ENGINES="/Library/Application Support/IPInformer/engines"
 CURRENT="$ENGINES/current"
-PATCH_TARGET="$ENGINES/1.14.4-ipinformer-4/sing-box"
-LEGACY_TARGETS=("$ENGINES/1.14.4-ipinformer-1/sing-box" "$ENGINES/1.14.4-ipinformer-2/sing-box" "$ENGINES/1.14.4-ipinformer-3/sing-box")
+PATCH_TARGET="$ENGINES/1.14.4-ipinformer-6/sing-box"
+LEGACY_TARGETS=("$ENGINES/1.14.4-ipinformer-1/sing-box" "$ENGINES/1.14.4-ipinformer-2/sing-box" "$ENGINES/1.14.4-ipinformer-3/sing-box" "$ENGINES/1.14.4-ipinformer-4/sing-box")
 PREVIOUS_FILE="$ENGINES/ipinformer-previous"
 INSTALLER="$SCRIPT_DIR/install-network-service.sh"
 TARGET_USER="${SUDO_USER:-$(/usr/bin/stat -f %Su /dev/console)}"
@@ -33,13 +33,13 @@ is_legacy_target() {
 }
 
 if [[ "$1" == "--install" ]]; then
-    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-4"
-    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-4.sha256"
+    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-6"
+    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-6.sha256"
     [[ -x "$BUNDLED" && -f "$HASH_FILE" ]] || { echo "Patched sing-box is not bundled"; exit 1; }
     EXPECTED=$(/bin/cat "$HASH_FILE")
     ACTUAL=$(/usr/bin/shasum -a 256 "$BUNDLED" | /usr/bin/awk '{print $1}')
     [[ "$EXPECTED" == "$ACTUAL" ]] || { echo "Patched sing-box checksum mismatch"; exit 1; }
-    "$BUNDLED" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-4' || {
+    "$BUNDLED" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-6' || {
         echo "Wrong patched sing-box version"; exit 1
     }
     [[ -f "$USER_CONFIG/sing-box-base.json" && -f "$USER_CONFIG/sing-box-policy.json" ]] || {
@@ -51,7 +51,7 @@ if [[ "$1" == "--install" ]]; then
     if [[ -L "$CURRENT" ]]; then
         CURRENT_BEFORE=$(/usr/bin/readlink "$CURRENT")
         if [[ "$CURRENT_BEFORE" == "$PATCH_TARGET" ]]; then
-            echo "IP Informer sing-box patch 1.14.4-4 is already active"
+            echo "IP Informer sing-box patch 1.14.4-6 is already active"
             exit 0
         fi
         if is_legacy_target "$CURRENT_BEFORE"; then
@@ -72,7 +72,7 @@ if [[ "$1" == "--install" ]]; then
         echo "No official sing-box is available for rollback"; exit 1
     fi
     [[ -x "$PREVIOUS" ]] || { echo "Previous sing-box is missing"; exit 1; }
-    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipinformer-4"
+    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipinformer-6"
     /usr/bin/install -o root -g wheel -m 755 "$BUNDLED" "$PATCH_TARGET"
     /bin/echo "$PREVIOUS" > "$PREVIOUS_FILE"
     /bin/chmod 600 "$PREVIOUS_FILE"
@@ -84,7 +84,7 @@ if [[ "$1" == "--install" ]]; then
         exit 1
     fi
     if is_legacy_target "$CURRENT_BEFORE"; then
-        /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3"
+        /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3" "$ENGINES/1.14.4-ipinformer-4"
     fi
     echo "IP Informer sing-box patch is active"
 else
@@ -100,6 +100,6 @@ else
         exit 1
     fi
     /bin/rm -f "$PREVIOUS_FILE"
-    /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3" "$ENGINES/1.14.4-ipinformer-4"
+    /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3" "$ENGINES/1.14.4-ipinformer-4" "$ENGINES/1.14.4-ipinformer-5" "$ENGINES/1.14.4-ipinformer-6"
     echo "Official sing-box is active"
 fi

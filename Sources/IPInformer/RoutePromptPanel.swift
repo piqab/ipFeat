@@ -9,6 +9,7 @@ struct RoutePromptOption: Identifiable {
 
 enum RoutePromptDecision {
     case selected(DefaultRoute)
+    case once(DefaultRoute)
     case ordinaryPolicy
     case blocked
 }
@@ -38,8 +39,9 @@ final class RoutePromptPanel: NSObject, NSWindowDelegate {
             parentPath: parentPath, applicationName: applicationName,
             isUnknown: isUnknown, options: options,
             onSelected: { [weak self] route in self?.finish(.selected(route)) },
+            onOnce: { [weak self] route in self?.finish(.once(route)) },
             onOrdinary: { [weak self] in self?.finish(.ordinaryPolicy) }
-        ))
+        ).environment(\.locale, AppLanguage.locale))
         panel.center()
         let origin = panel.frame.origin
         let displacement = CGFloat(offset % 8) * 28
@@ -74,10 +76,11 @@ private struct RoutePromptPanelView: View {
     let isUnknown: Bool
     let options: [RoutePromptOption]
     let onSelected: (DefaultRoute) -> Void
+    let onOnce: (DefaultRoute) -> Void
     let onOrdinary: () -> Void
 
     @State private var selectedIndex = 0
-    @State private var answer = "Click ? to ask the selected AI model what this process may be. Only the paths shown here are sent. AI never chooses the route."
+    @State private var answer = AppLanguage.localized("Click ? to ask the selected AI model what this process may be. Only the paths shown here are sent. AI never chooses the route.")
     @State private var isAsking = false
     @State private var aiTask: Task<Void, Never>?
 
@@ -123,8 +126,12 @@ private struct RoutePromptPanelView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             HStack {
                 Spacer()
-                Button(isUnknown ? "Use default route" : "Use application route") { onOrdinary() }
-                Button(isUnknown ? "Use for this run" : "Remember route") {
+                Button(AppLanguage.localized(isUnknown ? "Use default once" : "Use application route")) { onOrdinary() }
+                Button("Use once") {
+                    guard options.indices.contains(selectedIndex) else { return }
+                    onOnce(options[selectedIndex].route)
+                }
+                Button("Save route") {
                     guard options.indices.contains(selectedIndex) else { return }
                     onSelected(options[selectedIndex].route)
                 }
@@ -141,11 +148,11 @@ private struct RoutePromptPanelView: View {
 
     private func askAI() {
         guard let profile = ProcessAISettings.shared.selectedProfile else {
-            answer = "Configure and select a model in Settings → AI."
+            answer = AppLanguage.localized("Configure and select a model in Settings → AI.")
             return
         }
         isAsking = true
-        answer = "Asking \(profile.name)…"
+        answer = String(format: AppLanguage.localized("Asking %@…"), profile.name)
         aiTask = Task { @MainActor in
             do {
                 let result = try await ProcessAIClient.explain(

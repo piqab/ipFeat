@@ -8,21 +8,39 @@
 		<data>
 		xVM3fy/HH2jMwKcX3JCVPWjs3XA=
 		</data>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-4</key>
+		<key>Resources/en.lproj/Localizable.strings</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			Cc7WB4JHO6lZ46wZGTw15RWD2DE=
+			</data>
+			<key>optional</key>
+			<true/>
+		</dict>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-6</key>
 		<data>
-		q+1CCd8JSU0BwPT4MgE6V9MCTAM=
+		PswBACreOAeVmSV98Ie0eIpx85M=
 		</data>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-4.sha256</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-6.sha256</key>
 		<data>
-		cznQnG5hHVBhDFLfazqRd8iTDXM=
+		sH8wjkQYDDpWvQ51898d8umBtAc=
 		</data>
+		<key>Resources/ru.lproj/Localizable.strings</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			bAgueNUXqsztnt+1OzdG22vWuQE=
+			</data>
+			<key>optional</key>
+			<true/>
+		</dict>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<data>
 		/HBbPocrO4XbT1aujRoREIy22ts=
 		</data>
 		<key>Resources/scripts/install-patched-engine.sh</key>
 		<data>
-		7JnK9MVQBy5DCgnJa+lcxh/SMJs=
+		WdDVMy1EFyMASFJ3vQ88PWDcMkA=
 		</data>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>
 		<data>
@@ -44,6 +62,19 @@
 		<data>
 		bmDTCZcbalQXgiykSXw4vxFZEbA=
 		</data>
+		<key>Resources/scripts/uninstall-network-service.sh</key>
+		<data>
+		JaDYTA/aTdOTxVkWTeT7X0wWQVo=
+		</data>
+		<key>Resources/zh-Hans.lproj/Localizable.strings</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			9bH8AU42e8oX6JxKjHNouHhXm4Y=
+			</data>
+			<key>optional</key>
+			<true/>
+		</dict>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -63,19 +94,37 @@
 			/cakepdozAZEwB4kgFxYIWzpP2G+cyLt0VEO3j1D6VU=
 			</data>
 		</dict>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-4</key>
+		<key>Resources/en.lproj/Localizable.strings</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			gcJ6bBaobMWDGXiZJXR3qyufAFW+qbppTEYd3hQJUVY=
+			TQ7yyUPRyv51A5Dckqts3m8FRbORh/NNizpCCZVHRJM=
+			</data>
+			<key>optional</key>
+			<true/>
+		</dict>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-6</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			WNnmqrckdt/2EQyIawyzYsIn7Ip2/vJdu2xTuu2fvqE=
 			</data>
 		</dict>
-		<key>Resources/engines/sing-box-1.14.4-ipinformer-4.sha256</key>
+		<key>Resources/engines/sing-box-1.14.4-ipinformer-6.sha256</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			eT7hiqKRIwl8LrrUYtMWDIjhEzlxMF61X2EyaoVk+xE=
+			sIIioLhsXmGoKFxo4MaZQn+uCEpvNh5DYv5QljjioMQ=
 			</data>
+		</dict>
+		<key>Resources/ru.lproj/Localizable.strings</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			b5jTyhzO1QfM6ikJxJonnIdWwjusgGvpbBNJaS0x0nw=
+			</data>
+			<key>optional</key>
+			<true/>
 		</dict>
 		<key>Resources/scripts/install-network-service.sh</key>
 		<dict>
@@ -88,7 +137,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			nb8ulClcCY0cryPdJzzRWH3vEVIUmuoOfeynPCs4v0k=
+			CQn+RtjH/meQxeK6+KturUpiaaATGSfiLPcNh+0Heyc=
 			</data>
 		</dict>
 		<key>Resources/scripts/service/com.ipinformer.network.plist</key>
@@ -125,6 +174,22 @@
 			<data>
 			NxCtQvhG3F9kREUHcExKFas04BSdtH36hHyI920dVNY=
 			</data>
+		</dict>
+		<key>Resources/scripts/uninstall-network-service.sh</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			mLpNUIJuoQwpA+Kmau4PwqVLqIuNfvP9dUNfO4i0pHU=
+			</data>
+		</dict>
+		<key>Resources/zh-Hans.lproj/Localizable.strings</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			CR6vx4iOqd6Mb4Yzwyr68Xc+u6ljfZ3HlNFYm3Vmrm8=
+			</data>
+			<key>optional</key>
+			<true/>
 		</dict>
 	</dict>
 	<key>rules</key>

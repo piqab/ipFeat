@@ -2,41 +2,17 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private static let widgetsVisibleKey = "widgetsVisible"
-
-    let monitor = IPMonitor()
+final class AppDelegate: NSObject, NSApplicationDelegate {
     let routingStore = RoutingStore()
     private lazy var childRoutePromptServer = ChildRoutePromptServer(store: routingStore)
-
-    private var panelsByScreen: [String: NSPanel] = [:]
     private var statusItem: NSStatusItem?
     private let statusPopover = NSPopover()
     private var settingsWindow: NSWindow?
-    private var widgetsVisible: Bool = {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: AppDelegate.widgetsVisibleKey) != nil else { return true }
-        return defaults.bool(forKey: AppDelegate.widgetsVisibleKey)
-    }()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-        synchronizePanels()
+        NSApp.setActivationPolicy(.regular)
         createStatusItem()
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(screenParametersDidChange),
-            name: NSApplication.didChangeScreenParametersNotification,
-            object: nil
-        )
-
-        monitor.onAddressChange = { [weak self] oldAddress, newAddress in
-            self?.announceChange(from: oldAddress, to: newAddress)
-        }
-        monitor.start()
-        routingStore.startRouteMonitoring { [weak monitor = monitor] in
-            monitor?.sources ?? []
-        }
+        routingStore.startNetworkTopologyMonitoring()
         childRoutePromptServer.start()
         let hasEngine = [
             "/Library/Application Support/IPInformer/engines/current",
@@ -46,69 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        NotificationCenter.default.removeObserver(self)
-        monitor.stop()
-        routingStore.stopRouteMonitoring()
+        routingStore.stopNetworkTopologyMonitoring()
         childRoutePromptServer.stop()
-    }
-
-    private func makePanel(for screen: NSScreen, identifier: String) -> NSPanel {
-        let content = WidgetView(monitor: monitor)
-        let hostingController = NSHostingController(rootView: content)
-        let size = NSSize(width: 146, height: 28)
-
-        let panel = NSPanel(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.contentViewController = hostingController
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.isMovableByWindowBackground = true
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.delegate = self
-        panel.setContentSize(size)
-
-        let visible = screen.visibleFrame
-        let savedOffset = UserDefaults.standard.string(forKey: "widgetOffset.\(identifier)")
-            .map(NSPointFromString)
-        let xOffset = min(max(savedOffset?.x ?? (visible.width - size.width - 24), 0), max(visible.width - size.width, 0))
-        let topOffset = min(max(savedOffset?.y ?? 24, 0), max(visible.height - size.height, 0))
-        panel.setFrameOrigin(NSPoint(
-            x: visible.minX + xOffset,
-            y: visible.maxY - size.height - topOffset
-        ))
-
-        if widgetsVisible {
-            panel.orderFrontRegardless()
-        }
-        return panel
-    }
-
-    private func synchronizePanels() {
-        let currentScreens = Dictionary(uniqueKeysWithValues: NSScreen.screens.map {
-            (screenIdentifier($0), $0)
-        })
-
-        for identifier in Array(panelsByScreen.keys) where currentScreens[identifier] == nil {
-            panelsByScreen.removeValue(forKey: identifier)?.close()
-        }
-
-        for (identifier, screen) in currentScreens where panelsByScreen[identifier] == nil {
-            panelsByScreen[identifier] = makePanel(for: screen, identifier: identifier)
-        }
-    }
-
-    private func screenIdentifier(_ screen: NSScreen) -> String {
-        if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
-            return number.stringValue
-        }
-        return screen.localizedName
     }
 
     private func createStatusItem() {
@@ -150,37 +65,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let rowCount = nonEmptyGroups + (hasUngrouped ? 1 : 0)
         let content = MenuBarPopoverView(
-            store: routingStore, widgetsVisible: widgetsVisible,
-            checkNow: { [weak self] in self?.checkNow() },
-            toggleWidgets: { [weak self] in self?.toggleWidget() },
+            store: routingStore,
             openSettings: { [weak self] in self?.openSettings() },
             addApplications: { [weak self] groupID in self?.chooseApplications(toGroup: groupID) },
             quit: { NSApp.terminate(nil) },
             close: { [weak self] in self?.statusPopover.performClose(nil) }
         )
-        statusPopover.contentViewController = NSHostingController(rootView: content)
+        statusPopover.contentViewController = NSHostingController(rootView: content.environment(\.locale, AppLanguage.locale))
         statusPopover.contentSize = NSSize(width: 340, height: MenuBarPopoverView.preferredHeight(rowCount: rowCount))
         statusPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-    }
-
-    @objc private func checkNow() {
-        monitor.checkNow()
-    }
-
-    @objc private func toggleWidget() {
-        widgetsVisible.toggle()
-        UserDefaults.standard.set(widgetsVisible, forKey: Self.widgetsVisibleKey)
-        for panel in panelsByScreen.values {
-            if widgetsVisible {
-                panel.orderFrontRegardless()
-            } else {
-                panel.orderOut(nil)
-            }
-        }
-    }
-
-    @objc private func screenParametersDidChange() {
-        synchronizePanels()
     }
 
     @objc private func openSettings() {
@@ -190,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func chooseApplications(toGroup groupID: UUID?) {
         statusPopover.performClose(nil)
         let panel = NSOpenPanel()
-        panel.title = "Выберите программы"
+        panel.title = AppLanguage.localized("Выберите программы")
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
@@ -199,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let errors = routingStore.addApplications(at: panel.urls, toGroup: groupID)
         if !errors.isEmpty {
             let alert = NSAlert()
-            alert.messageText = "Не удалось добавить некоторые программы"
+            alert.messageText = AppLanguage.localized("Не удалось добавить некоторые программы")
             alert.informativeText = errors.joined(separator: "\n")
             alert.runModal()
         }
@@ -207,50 +100,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showSettings(initialTab: Int) {
         if let settingsWindow {
-            NSApp.setActivationPolicy(.regular)
             settingsWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-
-        let content = SettingsView(monitor: monitor, routingStore: routingStore, initialTab: initialTab)
-        let controller = NSHostingController(rootView: content)
-        let window = NSWindow(contentViewController: controller)
-        window.title = "Настройки IP Informer"
+        let content = SettingsView(routingStore: routingStore, initialTab: initialTab)
+        let window = NSWindow(contentViewController: NSHostingController(rootView: content))
+        window.title = AppLanguage.localized("Настройки IP Informer")
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 820, height: 620))
         window.center()
-        window.delegate = self
         settingsWindow = window
-        NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
-        NSApp.setActivationPolicy(.accessory)
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings(initialTab: 0)
+        return true
     }
-
-    func windowDidMove(_ notification: Notification) {
-        guard let panel = notification.object as? NSPanel,
-              let entry = panelsByScreen.first(where: { $0.value === panel }),
-              let assignedScreen = NSScreen.screens.first(where: { screenIdentifier($0) == entry.key }) else {
-            return
-        }
-
-        let visible = assignedScreen.visibleFrame
-        let offset = NSPoint(
-            x: panel.frame.minX - visible.minX,
-            y: visible.maxY - panel.frame.maxY
-        )
-        UserDefaults.standard.set(NSStringFromPoint(offset), forKey: "widgetOffset.\(entry.key)")
-    }
-
-    private func announceChange(from oldAddress: String, to newAddress: String) {
-        NSSound(named: "Ping")?.play()
-        monitor.flash()
-    }
-
 }

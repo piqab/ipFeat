@@ -25,6 +25,10 @@ enum ServerSecretStore {
     }
 
     static func load(id: UUID) -> String? {
+        try? loadChecked(id: id)
+    }
+
+    static func loadChecked(id: UUID) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -33,9 +37,32 @@ enum ServerSecretStore {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        guard let data = result as? Data else {
+            throw NSError(domain: "IPInformer.ServerSecretStore", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: AppLanguage.localized("Server JSON in Keychain is not data")])
+        }
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "IPInformer.ServerSecretStore", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: AppLanguage.localized("Server JSON in Keychain is not UTF-8")])
+        }
+        return json
+    }
+
+    static func allRequired(for connections: [ClientConnection]) throws -> [String: String] {
+        var result: [String: String] = [:]
+        for connection in connections {
+            guard let json = try loadChecked(id: connection.id) else {
+                throw BackupError.incompleteArchive(String(format: AppLanguage.localized("Server JSON is missing from Keychain for %@"),
+                                                           connection.name))
+            }
+            result[connection.id.uuidString] = json
+        }
+        return result
     }
 
     static func all(for connections: [ClientConnection]) -> [String: String] {

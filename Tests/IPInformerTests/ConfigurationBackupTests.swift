@@ -25,12 +25,19 @@ final class ConfigurationBackupTests: XCTestCase {
                                           serverIPv4: "203.0.113.10", protocolName: "vless",
                                           singBoxVersion: "1.12.0")
         routing.clientConnections = [connection]
+        routing.webKitProfileID = removed.id
+        routing.childCommandChoices = [ChildCommandChoice(applicationID: routing.applications[0].id,
+            executablePath: "/usr/bin/curl", route: .outbound("vps-test"))]
+        routing.savedProcessRoutes = [SavedProcessRoute(executablePath: "/usr/bin/git", route: .outbound("vps-test"))]
         let result = try ClientConnectionRemoval.prepare(routing, id: connection.id,
                                                          replacementProfileID: replacement.id)
         XCTAssertEqual(result.defaultRoute, .outbound("proxy"))
         XCTAssertEqual(result.groups[0].profileID, replacement.id)
         XCTAssertEqual(result.applications[0].profileID, replacement.id)
         XCTAssertEqual(result.commands[0].profileID, replacement.id)
+        XCTAssertEqual(result.webKitProfileID, replacement.id)
+        XCTAssertEqual(result.childCommandChoices[0].route, .outbound("proxy"))
+        XCTAssertEqual(result.savedProcessRoutes[0].route, .outbound("proxy"))
         XCTAssertTrue(result.clientConnections.isEmpty)
         XCTAssertFalse(result.profiles.contains(where: { $0.id == removed.id }))
         XCTAssertFalse(result.mainConfigurationJSON.contains("vps-test"))
@@ -95,39 +102,56 @@ final class ConfigurationBackupTests: XCTestCase {
     func testEncryptedBackupRoundTripRejectsWrongPasswordAndTampering() throws {
         var routing = RoutingConfiguration(defaultRoute: .outbound("proxy"))
         routing.commands = [RoutedCommand(name: "ssh", executablePath: "/usr/bin/ssh")]
-        let connection = ClientConnection(name: "VPS", outboundTag: "server-test",
+        routing.savedProcessRoutes = [SavedProcessRoute(executablePath: "/usr/bin/curl", route: .outbound("proxy"))]
+        var connection = ClientConnection(name: "VPS", outboundTag: "server-test",
                                           serverIPv4: "203.0.113.10", protocolName: "vless",
                                           singBoxVersion: "1.12.0")
+        connection.outboundJSON = #"{"type":"vless","tag":"server-test","server":"203.0.113.10"}"#
         routing.clientConnections = [connection]
         let aiProfile = ProcessAIProfile(name: "Local model", provider: .ollama,
                                          endpoint: "http://127.0.0.1:11434/api/chat", model: "test-model")
-        let backup = ConfigurationBackup(
+        let pending = PendingServerInstallation(id: UUID(), name: "New VPS", serverIPv4: "203.0.113.11",
+            sshPort: 2222, architecture: "amd64", version: "1.12.0", protocolName: "vless",
+            outboundTag: "server-pending", clientJSON: #"{"type":"vless"}"#,
+            serverJSON: #"{"inbounds":[]}"#, createdAt: Date(timeIntervalSince1970: 2))
+        var backup = ConfigurationBackup(
             routing: routing,
-            sources: IPSource.defaults, checkInterval: 15,
-            widgetsVisible: false, widgetOffsets: ["widgetOffset.1": "{10, 20}"],
             launchAtLogin: true,
             configurationHistory: [ConfigurationRevision(date: Date(timeIntervalSince1970: 1), json: "{\"secret\":\"sample\"}")],
             engineAutoInstall: true,
             serverConfigurations: [connection.id.uuidString: "{\"private_key\":\"secret\"}"],
             processAISettings: ProcessAISettingsSnapshot(
                 profiles: [aiProfile], selectedProfileID: aiProfile.id,
-                keys: [aiProfile.id.uuidString: "ai-test-secret"])
+                keys: [aiProfile.id.uuidString: "ai-test-secret"]),
+            preferredAppLanguage: "zh-Hans",
+            pendingServerInstallations: [pending]
         )
+        backup.sources = [IPSource(id: UUID(), name: "Retired checker", url: "https://example.com/ip",
+                                   isEnabled: true, isBuiltIn: false)]
+        backup.checkInterval = 30
+        backup.widgetsVisible = true
+        backup.widgetOffsets = ["display": "{10, 20}"]
         let encrypted = try ConfigurationArchive.encrypt(backup, password: "correct horse battery staple")
         XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("sample"))
         XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("private_key"))
         XCTAssertFalse(String(decoding: encrypted, as: UTF8.self).contains("ai-test-secret"))
         let decoded = try ConfigurationArchive.decrypt(encrypted, password: "correct horse battery staple")
         XCTAssertEqual(decoded.routing.defaultRoute, .outbound("proxy"))
-        XCTAssertEqual(decoded.sources.count, backup.sources.count)
-        XCTAssertEqual(decoded.widgetOffsets, backup.widgetOffsets)
+        XCTAssertNil(decoded.sources)
+        XCTAssertNil(decoded.checkInterval)
+        XCTAssertNil(decoded.widgetsVisible)
+        XCTAssertNil(decoded.widgetOffsets)
         XCTAssertEqual(decoded.configurationHistory.first?.json, backup.configurationHistory.first?.json)
         XCTAssertEqual(decoded.engineAutoInstall, true)
+        XCTAssertEqual(decoded.preferredAppLanguage, "zh-Hans")
         XCTAssertEqual(decoded.routing.clientConnections, [connection])
         XCTAssertEqual(decoded.routing.commands, routing.commands)
+        XCTAssertEqual(decoded.routing.savedProcessRoutes, routing.savedProcessRoutes)
+        XCTAssertEqual(decoded.routing.clientConnections[0].outboundJSON, connection.outboundJSON)
         XCTAssertEqual(decoded.serverConfigurations, backup.serverConfigurations)
         XCTAssertEqual(decoded.processAISettings?.profiles, [aiProfile])
         XCTAssertEqual(decoded.processAISettings?.keys[aiProfile.id.uuidString], "ai-test-secret")
+        XCTAssertEqual(decoded.pendingServerInstallations, [pending])
         XCTAssertThrowsError(try ConfigurationArchive.decrypt(encrypted, password: "wrong password"))
 
         var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encrypted) as? [String: Any])
@@ -136,6 +160,55 @@ final class ConfigurationBackupTests: XCTestCase {
         envelope["sealedData"] = sealed.base64EncodedString()
         let tampered = try JSONSerialization.data(withJSONObject: envelope)
         XCTAssertThrowsError(try ConfigurationArchive.decrypt(tampered, password: "correct horse battery staple"))
+    }
+
+    func testNewArchiveRejectsMissingServerSecret() throws {
+        var routing = RoutingConfiguration()
+        routing.clientConnections = [ClientConnection(name: "VPS", outboundTag: "server-test",
+            serverIPv4: "203.0.113.10", protocolName: "vless", singBoxVersion: "1.12.0")]
+        let backup = ConfigurationBackup(routing: routing, launchAtLogin: false, configurationHistory: [])
+        XCTAssertThrowsError(try ConfigurationArchive.encrypt(backup, password: "strong-password"))
+    }
+
+    func testVersionOneArchiveRemainsReadable() throws {
+        var backup = ConfigurationBackup(routing: RoutingConfiguration(),
+            sources: [IPSource(id: UUID(), name: "Old source", url: "https://example.com/ip",
+                               isEnabled: true, isBuiltIn: false)],
+            checkInterval: 30, widgetsVisible: true, widgetOffsets: ["widgetOffset.1": "{10, 20}"],
+            launchAtLogin: false, configurationHistory: [])
+        backup.version = 1
+        let encrypted = try ConfigurationArchive.encrypt(backup, password: "strong-password")
+        let restored = try ConfigurationArchive.decrypt(encrypted, password: "strong-password")
+        XCTAssertEqual(restored.version, 1)
+        XCTAssertEqual(restored.sources?.first?.name, "Old source")
+    }
+
+    func testVersionTwoArchiveRemainsReadable() throws {
+        var backup = ConfigurationBackup(routing: RoutingConfiguration(),
+            sources: [IPSource(id: UUID(), name: "Old source", url: "https://example.com/ip",
+                               isEnabled: true, isBuiltIn: false)],
+            checkInterval: 60, widgetsVisible: false,
+            launchAtLogin: true, configurationHistory: [], pendingServerInstallations: [])
+        backup.version = 2
+        let encrypted = try ConfigurationArchive.encrypt(backup, password: "strong-password")
+        let restored = try ConfigurationArchive.decrypt(encrypted, password: "strong-password")
+        XCTAssertEqual(restored.version, 2)
+        XCTAssertEqual(restored.sources?.first?.name, "Old source")
+        XCTAssertEqual(restored.checkInterval, 60)
+    }
+
+    func testNewArchiveRejectsPendingInstallationThatIsAlreadyRegistered() throws {
+        let id = UUID()
+        let connection = ClientConnection(id: id, name: "VPS", outboundTag: "server-test",
+            serverIPv4: "203.0.113.10", protocolName: "vless", singBoxVersion: "1.14.4")
+        let pending = PendingServerInstallation(id: id, name: "VPS", serverIPv4: "203.0.113.10",
+            sshPort: 22, architecture: "amd64", version: "1.14.4", protocolName: "vless",
+            outboundTag: "server-test", clientJSON: "{}", serverJSON: "{}", createdAt: Date())
+        var routing = RoutingConfiguration()
+        routing.clientConnections = [connection]
+        let backup = ConfigurationBackup(routing: routing, launchAtLogin: false, configurationHistory: [],
+            serverConfigurations: [id.uuidString: "{}"], pendingServerInstallations: [pending])
+        XCTAssertThrowsError(try ConfigurationArchive.encrypt(backup, password: "strong-password"))
     }
 
     func testDiffShowsChangedLines() {
@@ -156,11 +229,33 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertFalse(result.configuration.applications[0].enabled)
     }
 
+    @MainActor func testRestoredServerNeedsFreshRemoteVerification() {
+        var connection = ClientConnection(name: "VPS", outboundTag: "server-test",
+            serverIPv4: "203.0.113.10", protocolName: "vless", singBoxVersion: "1.14.4")
+        connection.installationVerified = true
+        connection.installationCheckedAt = Date()
+        var routing = RoutingConfiguration()
+        routing.clientConnections = [connection]
+        let restored = RoutingStore.prepareRestoredConfiguration(routing).configuration
+        XCTAssertNil(restored.clientConnections[0].installationVerified)
+        XCTAssertNil(restored.clientConnections[0].installationCheckedAt)
+    }
+
     @MainActor func testMissingCommandIsDisabledDuringRestore() {
         let missing = RoutedCommand(name: "missing", executablePath: "/usr/bin/ipinformer-missing-command")
         let result = RoutingStore.prepareRestoredConfiguration(RoutingConfiguration(commands: [missing]))
-        XCTAssertEqual(result.missingApplications, ["Команда: missing"])
+        XCTAssertEqual(result.missingApplications, ["Command: missing"])
         XCTAssertFalse(result.configuration.commands[0].enabled)
+    }
+
+    @MainActor func testMissingSavedProcessRouteIsDisabledDuringRestore() {
+        var routing = RoutingConfiguration()
+        let route = SavedProcessRoute(executablePath: "/usr/bin/ipinformer-missing-process",
+                                      route: .outbound("proxy"))
+        routing.savedProcessRoutes = [route]
+        let result = RoutingStore.prepareRestoredConfiguration(routing)
+        XCTAssertEqual(result.missingApplications, ["Saved route: ipinformer-missing-process"])
+        XCTAssertFalse(result.configuration.savedProcessRoutes[0].enabled)
     }
 
     @MainActor func testBatchImportSkipsAppAlreadyInAnotherGroup() throws {

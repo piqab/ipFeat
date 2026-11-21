@@ -16,7 +16,40 @@ struct ServerSSHSettings: Sendable {
 enum ServerDeployment {
     typealias Log = @Sendable (String) -> Void
 
-    static func deploy(configuration: String, release: EngineRelease, access: ServerSSHSettings,
+    struct VerificationReport: Sendable {
+        let hostName: String
+        let architecture: String
+        let configFound: Bool
+        let unitFound: Bool
+        let binaryFound: Bool
+        let hashMatches: Bool
+        let versionMatches: Bool
+        let active: Bool
+        let enabled: Bool
+        let output: String
+
+        var isInstalled: Bool {
+            configFound && unitFound && binaryFound && hashMatches && versionMatches && active && enabled
+        }
+
+        var summary: String {
+            if isInstalled {
+                return String(format: AppLanguage.localized("Verified on %@: configuration, sing-box and systemd service are ready"), hostName)
+            }
+            var problems: [String] = []
+            if !configFound { problems.append(AppLanguage.localized("configuration missing")) }
+            else if !hashMatches { problems.append(AppLanguage.localized("configuration hash differs")) }
+            if !unitFound { problems.append(AppLanguage.localized("systemd unit missing")) }
+            if !binaryFound { problems.append(AppLanguage.localized("sing-box binary missing")) }
+            else if !versionMatches { problems.append(AppLanguage.localized("sing-box version differs")) }
+            if !active { problems.append(AppLanguage.localized("service not active")) }
+            if !enabled { problems.append(AppLanguage.localized("service not enabled at boot")) }
+            return String(format: AppLanguage.localized("Verification failed on %@: %@"),
+                          hostName, problems.joined(separator: ", "))
+        }
+    }
+
+    static func deploy(configuration: String, version: String, access: ServerSSHSettings,
                        log: Log? = nil) throws -> String {
         let (target, options) = try sshAccess(access)
         let ssh = ["-p", String(access.port)] + options + [target]
@@ -30,18 +63,11 @@ enum ServerDeployment {
         let platform = try run("/usr/bin/ssh", ssh + [probe], authentication: access.authentication, log: log)
         let architecture = try parsePlatform(platform)
         log?("Платформа принята: Linux \(architecture)\n")
-        let version = release.version
         guard version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$"#, options: .regularExpression) != nil else {
             throw error("Некорректный номер версии sing-box")
         }
         let assetName = "sing-box-\(version)-linux-\(architecture).tar.gz"
-        guard let digest = release.assets.first(where: { $0.name == assetName })?.digest,
-              digest.hasPrefix("sha256:"), digest.count == 71 else {
-            throw error("У выпуска нет проверяемого архива \(assetName)")
-        }
-        let hash = String(digest.dropFirst(7))
-        guard hash.allSatisfy(\.isHexDigit) else { throw error("Некорректная контрольная сумма") }
-        log?("Выпуск sing-box: \(version), архив \(assetName), SHA-256 сверяется перед установкой\n")
+        log?("Выпуск sing-box: \(version), архив \(assetName); VPS получит SHA-256 с GitHub и проверит архив\n")
 
         let folder = "/tmp/ipinformer-new-\(UUID().uuidString.lowercased())"
         let localConfig = FileManager.default.temporaryDirectory
@@ -61,12 +87,82 @@ enum ServerDeployment {
         let scp = ["-P", String(access.port)] + options + [localConfig.path, "\(target):\(folder)/config.json"]
         log?("$ scp -P \(access.port) <серверный JSON> \(target):\(folder)/config.json\n")
         _ = try run("/usr/bin/scp", scp, authentication: access.authentication, log: log)
-        let script = deploymentScript(folder: folder, version: version, assetName: assetName, sha256: hash)
+        let script = deploymentScript(folder: folder, version: version, assetName: assetName)
         let privilege = access.user == "root" ? "/bin/bash -s" : "sudo -n /bin/bash -s"
         log?("$ ssh -p \(access.port) \(target) '\(privilege)' < <сценарий установки>\n")
         let result = try run("/usr/bin/ssh", ssh + [privilege], input: Data(script.utf8),
                              authentication: access.authentication, log: log)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func installedMatches(version: String, configSHA256: String, access: ServerSSHSettings,
+                                 log: Log? = nil) throws -> Bool {
+        try verify(version: version, configSHA256: configSHA256, access: access, log: log).isInstalled
+    }
+
+    static func verify(version: String, configSHA256: String, access: ServerSSHSettings,
+                       log: Log? = nil) throws -> VerificationReport {
+        guard version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$"#, options: .regularExpression) != nil,
+              configSHA256.range(of: #"^[0-9a-fA-F]{64}$"#, options: .regularExpression) != nil else {
+            throw error("Invalid sing-box version or configuration hash")
+        }
+        let (target, options) = try sshAccess(access)
+        let privilege = access.user == "root" ? "/bin/bash -s" : "sudo -n /bin/bash -s"
+        let check = """
+        set -u
+        printf 'IPINFORMER_VERIFY_BEGIN=1\\n'
+        printf 'IPINFORMER_VERIFY_HOST=%s\\n' "$(hostname)"
+        printf 'IPINFORMER_VERIFY_ARCH=%s\\n' "$(uname -m)"
+        [ -f /etc/ipinformer-sing-box/config.json ] && config=1 || config=0
+        [ -f /etc/systemd/system/ipinformer-sing-box.service ] && unit=1 || unit=0
+        [ -x /usr/local/lib/ipinformer-sing-box/sing-box ] && binary=1 || binary=0
+        actual_hash=$(sha256sum /etc/ipinformer-sing-box/config.json 2>/dev/null | cut -d ' ' -f 1)
+        actual_version=$(/usr/local/lib/ipinformer-sing-box/sing-box version 2>/dev/null | sed -n '1{s/^sing-box version //p;}')
+        systemctl is-active --quiet ipinformer-sing-box.service 2>/dev/null && active=1 || active=0
+        systemctl is-enabled --quiet ipinformer-sing-box.service 2>/dev/null && enabled=1 || enabled=0
+        printf 'IPINFORMER_VERIFY_CONFIG=%s\\n' "$config"
+        printf 'IPINFORMER_VERIFY_UNIT=%s\\n' "$unit"
+        printf 'IPINFORMER_VERIFY_BINARY=%s\\n' "$binary"
+        printf 'IPINFORMER_VERIFY_HASH=%s\\n' "$actual_hash"
+        printf 'IPINFORMER_VERIFY_VERSION=%s\\n' "$actual_version"
+        printf 'IPINFORMER_VERIFY_ACTIVE=%s\\n' "$active"
+        printf 'IPINFORMER_VERIFY_ENABLED=%s\\n' "$enabled"
+        printf 'IPINFORMER_VERIFY_END=1\\n'
+        printf '\\n--- systemctl status ---\\n'
+        systemctl status ipinformer-sing-box.service --no-pager --full 2>&1 || true
+        printf '\\n--- journalctl (last 40 lines) ---\\n'
+        journalctl -u ipinformer-sing-box.service -n 40 --no-pager 2>&1 || true
+        """
+        log?("$ ssh -p \(access.port) \(target) '<independent service verification and journal>'\n")
+        let output = try run("/usr/bin/ssh", ["-p", String(access.port)] + options + [target, privilege],
+                             input: Data(check.utf8), authentication: access.authentication, log: log)
+        return try parseVerification(output, version: version, configSHA256: configSHA256)
+    }
+
+    static func parseVerification(_ output: String, version: String,
+                                  configSHA256: String) throws -> VerificationReport {
+        guard let begin = output.range(of: "IPINFORMER_VERIFY_BEGIN=1\n"),
+              let end = output.range(of: "IPINFORMER_VERIFY_END=1\n", range: begin.upperBound..<output.endIndex) else {
+            throw error("SSH verification returned no complete result. \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        let lines = output[begin.upperBound..<end.lowerBound].components(separatedBy: .newlines)
+        func value(_ key: String) -> String? {
+            lines.first(where: { $0.hasPrefix("IPINFORMER_VERIFY_\(key)=") })
+                .map { String($0.dropFirst("IPINFORMER_VERIFY_\(key)=".count)) }
+        }
+        guard let host = value("HOST"), !host.isEmpty, let arch = value("ARCH"),
+              let config = value("CONFIG"), let unit = value("UNIT"),
+              let binary = value("BINARY"), let hash = value("HASH"),
+              let actualVersion = value("VERSION"), let active = value("ACTIVE"),
+              let enabled = value("ENABLED"),
+              [config, unit, binary, active, enabled].allSatisfy({ $0 == "0" || $0 == "1" }) else {
+            throw error("SSH verification returned incomplete service checks")
+        }
+        return VerificationReport(hostName: host, architecture: arch,
+            configFound: config == "1", unitFound: unit == "1", binaryFound: binary == "1",
+            hashMatches: hash.caseInsensitiveCompare(configSHA256) == .orderedSame,
+            versionMatches: actualVersion == version, active: active == "1", enabled: enabled == "1",
+            output: output)
     }
 
     private static func sshAccess(_ access: ServerSSHSettings) throws -> (String, [String]) {
@@ -131,10 +227,13 @@ enum ServerDeployment {
     }
 
     static func parsePlatform(_ output: String) throws -> String {
-        let lines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let lines = output.components(separatedBy: .newlines)
         func value(_ key: String) -> String? {
-            lines.last(where: { $0.hasPrefix("IPINFORMER_\(key)=") })
-                .map { String($0.dropFirst("IPINFORMER_\(key)=".count)) }
+            let marker = "IPINFORMER_\(key)="
+            return lines.reversed().compactMap { line in
+                guard let range = line.range(of: marker) else { return nil }
+                return String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+            }.first
         }
         guard let os = value("OS"), let arch = value("ARCH"), let systemctl = value("SYSTEMCTL") else {
             throw error("Не удалось прочитать ответ SSH о платформе. Вывод: \(output.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -150,8 +249,8 @@ enum ServerDeployment {
         }
     }
 
-    static func deploymentScript(folder: String, version: String,
-                                 assetName: String, sha256: String) -> String {
+    static func deploymentScript(folder: String, version: String, assetName: String,
+                                 cleanupInputFolder: Bool = false) -> String {
         let member = "sing-box-\(version)-linux-\(assetName.contains("arm64") ? "arm64" : "amd64")/sing-box"
         return """
         set -euo pipefail
@@ -162,7 +261,7 @@ enum ServerDeployment {
         fi
         work=$(mktemp -d)
         created=0
-        cleanup() { rm -rf "$work"; }
+        cleanup() { rm -rf "$work"; \(cleanupInputFolder ? "rm -rf '\(folder)';" : "") }
         rollback() {
           if [ "$created" = 1 ]; then
             systemctl disable --now ipinformer-sing-box.service >/dev/null 2>&1 || true
@@ -175,10 +274,69 @@ enum ServerDeployment {
         trap rollback ERR
         cp '\(folder)/config.json' "$work/config.json"
         chmod 600 "$work/config.json"
-        curl --fail --location --retry 2 --connect-timeout 10 --max-time 120 \\
-          'https://github.com/SagerNet/sing-box/releases/download/v\(version)/\(assetName)' \\
-          --output "$work/\(assetName)"
-        printf '%s  %s\\n' '\(sha256)' "$work/\(assetName)" | sha256sum -c -
+        command -v sha256sum >/dev/null 2>&1
+        command -v tar >/dev/null 2>&1
+        if [ -f '\(folder)/\(assetName)' ] && [ -f '\(folder)/\(assetName).sha256' ]; then
+          hash=$(cat '\(folder)/\(assetName).sha256')
+          cp '\(folder)/\(assetName)' "$work/\(assetName)"
+          echo 'Using verified archive transferred from another host'
+        else
+          if ! command -v curl >/dev/null 2>&1 || {
+            ! command -v python3 >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1;
+          }; then
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y curl jq ca-certificates
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y curl jq ca-certificates
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y curl jq ca-certificates
+            elif command -v zypper >/dev/null 2>&1; then
+              zypper --non-interactive install curl jq ca-certificates
+            else
+              echo 'curl and either python3 or jq are required to verify the sing-box release' >&2
+              exit 1
+            fi
+          fi
+          curl --ipv4 --fail --silent --show-error --location --retry 2 --connect-timeout 10 --max-time 40 \\
+            --header 'Accept: application/vnd.github+json' --header 'User-Agent: IPInformer/1' \\
+            'https://api.github.com/repos/SagerNet/sing-box/releases/tags/v\(version)' \\
+            --output "$work/release.json"
+          if command -v python3 >/dev/null 2>&1; then
+            digest=$(python3 - "$work/release.json" 'v\(version)' '\(assetName)' <<'PY'
+        import json
+        import sys
+        with open(sys.argv[1], encoding="utf-8") as stream:
+            release = json.load(stream)
+        if release.get("tag_name") != sys.argv[2]:
+            raise SystemExit("GitHub returned a different sing-box release")
+        assets = [asset for asset in release.get("assets", []) if asset.get("name") == sys.argv[3]]
+        if len(assets) != 1:
+            raise SystemExit("The sing-box release has no matching Linux archive")
+        print(assets[0].get("digest", ""))
+        PY
+            )
+          else
+            digest=$(jq -er --arg tag 'v\(version)' --arg asset '\(assetName)' \\
+              'if .tag_name != $tag then error("GitHub returned a different release")
+               else (.assets // [] | map(select(.name == $asset)) |
+                 if length == 1 then .[0].digest else error("Linux archive not found") end) end' \\
+              "$work/release.json")
+          fi
+          if [[ ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo 'GitHub did not provide a valid SHA-256 digest for the Linux archive' >&2
+            exit 1
+          fi
+          hash=${digest#sha256:}
+          curl --ipv4 --fail --location --retry 2 --connect-timeout 10 --max-time 120 \\
+            'https://github.com/SagerNet/sing-box/releases/download/v\(version)/\(assetName)' \\
+            --output "$work/\(assetName)"
+        fi
+        if [[ ! "$hash" =~ ^[0-9a-fA-F]{64}$ ]]; then
+          echo 'Invalid SHA-256 for sing-box archive' >&2
+          exit 1
+        fi
+        printf '%s  %s\\n' "$hash" "$work/\(assetName)" | sha256sum -c -
         tar -xzf "$work/\(assetName)" -C "$work" '\(member)'
         "$work/\(member)" check -c "$work/config.json"
         created=1
@@ -210,8 +368,9 @@ enum ServerDeployment {
         systemctl enable --now ipinformer-sing-box.service
         sleep 2
         systemctl is-active --quiet ipinformer-sing-box.service
+        systemctl is-enabled --quiet ipinformer-sing-box.service
         trap - ERR
-        echo 'sing-box server \(version) is active. Check that the VPS firewall permits the configured service port.'
+        echo 'sing-box server \(version) is active and enabled at boot. Check that the VPS firewall permits the configured service port.'
         """
     }
 

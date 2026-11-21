@@ -140,24 +140,25 @@ final class ProcessAISettings: ObservableObject {
         persist()
     }
 
-    func snapshot() -> ProcessAISettingsSnapshot {
-        ProcessAISettingsSnapshot(
-            profiles: profiles, selectedProfileID: selectedProfileID,
-            keys: Dictionary(uniqueKeysWithValues: profiles.compactMap { profile in
-                ProcessAIKeychain.load(id: profile.id).map { (profile.id.uuidString, $0) }
-            })
-        )
+    func snapshot() throws -> ProcessAISettingsSnapshot {
+        var keys: [String: String] = [:]
+        for profile in profiles {
+            if let key = try ProcessAIKeychain.loadChecked(id: profile.id) {
+                keys[profile.id.uuidString] = key
+            }
+        }
+        return ProcessAISettingsSnapshot(profiles: profiles, selectedProfileID: selectedProfileID, keys: keys)
     }
 
     func restore(_ snapshot: ProcessAISettingsSnapshot) throws {
         let oldIDs = Set(profiles.map(\.id))
         let newIDs = Set(snapshot.profiles.map(\.id))
-        for id in oldIDs.subtracting(newIDs) { ProcessAIKeychain.delete(id: id) }
+        for id in oldIDs.subtracting(newIDs) { try ProcessAIKeychain.deleteChecked(id: id) }
         for profile in snapshot.profiles {
             if let key = snapshot.keys[profile.id.uuidString] {
                 try ProcessAIKeychain.save(key, id: profile.id)
             } else {
-                ProcessAIKeychain.delete(id: profile.id)
+                try ProcessAIKeychain.deleteChecked(id: profile.id)
             }
         }
         profiles = snapshot.profiles
@@ -199,6 +200,10 @@ enum ProcessAIKeychain {
     }
 
     static func load(id: UUID) -> String? {
+        try? loadChecked(id: id)
+    }
+
+    static func loadChecked(id: UUID) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -207,18 +212,36 @@ enum ProcessAIKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        guard let data = result as? Data else {
+            throw NSError(domain: "IPInformer.ProcessAIKeychain", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: AppLanguage.localized("AI key in Keychain is not data")])
+        }
+        guard let key = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "IPInformer.ProcessAIKeychain", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: AppLanguage.localized("AI key in Keychain is not UTF-8")])
+        }
+        return key
     }
 
     static func delete(id: UUID) {
+        try? deleteChecked(id: id)
+    }
+
+    static func deleteChecked(id: UUID) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.uuidString
         ]
-        _ = SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
     }
 }
 
