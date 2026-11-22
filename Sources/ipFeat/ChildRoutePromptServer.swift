@@ -25,6 +25,8 @@ final class ChildRoutePromptServer {
     private let queue = DispatchQueue(label: "local.ipfeat.child-route")
     private var activePanels: [UUID: RoutePromptPanel] = [:]
     private var source: DispatchSourceRead?
+    var onPromptVisibilityChanged: (() -> Void)?
+    var hasActivePanels: Bool { !activePanels.isEmpty }
 
     init(store: RoutingStore) {
         self.store = store
@@ -170,9 +172,11 @@ final class ChildRoutePromptServer {
                 }
             }
             self.activePanels.removeValue(forKey: id)
+            DispatchQueue.main.async { [weak self] in self?.onPromptVisibilityChanged?() }
             complete(Self.routeString(for: decision))
         }
         activePanels[id] = panel
+        onPromptVisibilityChanged?()
         panel.show()
     }
 

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var routingStore = RoutingStore()
     private lazy var childRoutePromptServer = ChildRoutePromptServer(store: routingStore)
     private var statusItem: NSStatusItem?
@@ -10,9 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
         createStatusItem()
         routingStore.startNetworkTopologyMonitoring()
+        childRoutePromptServer.onPromptVisibilityChanged = { [weak self] in
+            self?.updateActivationPolicy()
+        }
         childRoutePromptServer.start()
         let hasEngine = [
             "/Library/Application Support/ipFeat/engines/current",
@@ -83,6 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func chooseApplications(toGroup groupID: UUID?) {
         statusPopover.performClose(nil)
+        NSApp.setActivationPolicy(.regular)
+        defer { updateActivationPolicy() }
         let panel = NSOpenPanel()
         panel.title = AppLanguage.localized("Выберите программы")
         panel.allowedContentTypes = [.application]
@@ -100,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSettings(initialTab: Int) {
+        NSApp.setActivationPolicy(.regular)
         if let settingsWindow {
             settingsWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -110,11 +116,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = AppLanguage.localized("Настройки ipFeat")
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 820, height: 620))
         window.center()
         settingsWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateActivationPolicy() {
+        let hasVisibleSettings = settingsWindow?.isVisible == true
+        let hasVisiblePrompts = childRoutePromptServer.hasActivePanels
+        NSApp.setActivationPolicy(hasVisibleSettings || hasVisiblePrompts ? .regular : .accessory)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // The window is still marked visible while this delegate method runs.
+        DispatchQueue.main.async { [weak self] in self?.updateActivationPolicy() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
