@@ -18,6 +18,8 @@ open "dist/ipFeat.app"
 
 `build-app.sh` builds both Swift executables, packages the monochrome Dock icon and menu bar template, builds the pinned local sing-box patch, and signs the app for local use. To reuse a previously built patch binary, set `IPFEAT_PATCHED_BINARY=/absolute/path/to/sing-box` for the build command. The source and patch contract are documented in [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
 
+After a pull request is merged into `main`, [the release workflow](.github/workflows/release.yml) builds the arm64 app and pinned patch on a GitHub macOS runner. It reads the app version from `Resources/Info.plist`, runs Swift tests, and creates a prerelease named `ipfeat-VERSION` with a ZIP and SHA-256 checksum. A later push with the same version does not replace the release. Bump the app version for each new release. The app is currently signed ad hoc and is not notarized; this prerelease is for local testing, not a standard Gatekeeper-ready download.
+
 On first launch, open **sing-box** to install the bundled patch and the managed network service. The service runs sing-box at login, maintains `utun100`, and applies a PF kill switch. **sing-box** also contains the interface language and launch-at-login settings. The **Programs**, **Profiles**, and **AI** tabs handle routing rules, named routes, and process explanations.
 
 If you need to stop the managed service and clear its PF rule from Terminal, run:

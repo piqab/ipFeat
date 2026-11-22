@@ -1,0 +1,95 @@
+name: Release ipFeat
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ipfeat-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Check release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid app version: $version" >&2
+            exit 1
+          fi
+          tag="ipfeat-$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists; skipping."
+          else
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "Tag $tag exists without a release; resolve it before publishing." >&2
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.5'
+          cache: false
+
+      - name: Run Swift tests
+        if: steps.version.outputs.publish == 'true'
+        run: swift test --disable-sandbox
+
+      - name: Build app and patched sing-box
+        if: steps.version.outputs.publish == 'true'
+        run: ./scripts/build-app.sh
+
+      - name: Verify and package app
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/ipFeat.app/Contents/Info.plist)" = "$VERSION"
+          codesign --verify --deep --strict dist/ipFeat.app
+          archive="ipFeat-$VERSION-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/ipFeat.app "dist/$archive"
+          (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
+
+      - name: Publish prerelease
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="ipFeat-$VERSION-macos-arm64.zip"
+          gh release create "$TAG" "dist/$archive" "dist/$archive.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ipFeat $VERSION" \
+            --notes "Pre-release for local testing. This build is signed ad hoc and is not notarized for standard macOS distribution." \
+            --generate-notes \
+            --prerelease
