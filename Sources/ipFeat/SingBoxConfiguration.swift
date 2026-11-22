@@ -217,21 +217,28 @@ enum SingBoxConfigurationGenerator {
             ["inbound": [managedInboundTag], "ip_version": 6, "port": [53], "action": "hijack-dns"],
             ["ip_version": 6, "action": "reject"]
         ]
-        let liveRules = ipv6Rules + updaterRule
-            + (domainRules.isEmpty ? [] : [
+        var liveRules: [[String: Any]] = ipv6Rules
+        liveRules.append(contentsOf: updaterRule)
+        if !domainRules.isEmpty {
+            liveRules.append(contentsOf: [
                 ["action": "sniff"],
                 ["protocol": "dns", "action": "hijack-dns"],
                 ["port": 53, "action": "hijack-dns"]
             ])
-            + (ancestorMatching ? redirects.map(withAncestorMatching) : redirects)
-            + (ancestorMatching ? localRules.map(withAncestorMatching) : localRules)
-            + domainRules
-            + childRules
-            + savedProcessRules
-            + commandRules
-            + webKitRules
-            + (ancestorMatching ? managedRules.map(withAncestorMatching) : managedRules)
-        route["rules"] = liveRules + infrastructureRules + defaultRules + originalRules
+        }
+        liveRules.append(contentsOf: ancestorMatching ? redirects.map(withAncestorMatching) : redirects)
+        liveRules.append(contentsOf: ancestorMatching ? localRules.map(withAncestorMatching) : localRules)
+        liveRules.append(contentsOf: domainRules)
+        liveRules.append(contentsOf: childRules)
+        liveRules.append(contentsOf: savedProcessRules)
+        liveRules.append(contentsOf: commandRules)
+        liveRules.append(contentsOf: webKitRules)
+        liveRules.append(contentsOf: ancestorMatching ? managedRules.map(withAncestorMatching) : managedRules)
+        var allRules = liveRules
+        allRules.append(contentsOf: infrastructureRules)
+        allRules.append(contentsOf: defaultRules)
+        allRules.append(contentsOf: originalRules)
+        route["rules"] = allRules
         route["find_process"] = true
         root["route"] = route
 
