@@ -1,6 +1,6 @@
 # sing-box patch status and manual checks
 
-The contract and porting requirements are in [SING_BOX_PATCH.md](SING_BOX_PATCH.md). The implementation is [patch revision 4](patches/sing-box-1.14.4-ipinformer-3.patch), pinned to sing-box `v1.14.4` at `c005f35300ce76427dc285481ec5695f5b179cd2`. Build it with [build-patched-sing-box.sh](scripts/build-patched-sing-box.sh). This patch affects only the local macOS engine; the VPS uses official sing-box.
+The contract and porting requirements are in [SING_BOX_PATCH.md](SING_BOX_PATCH.md). The current implementation is [patch revision 6](patches/sing-box-1.14.4-ipfeat-6.patch), pinned to sing-box `v1.14.4` at `c005f35300ce76427dc285481ec5695f5b179cd2`. Build it with [build-patched-sing-box.sh](scripts/build-patched-sing-box.sh). This patch affects only the local macOS engine; the VPS uses official sing-box.
 
 Implemented:
 
@@ -15,7 +15,7 @@ Implemented:
 
 Automated checks include Go process/routing tests, Swift configuration tests and `sing-box check` against a live base/policy pair.
 
-Manual checks after installing revision 4 on the target Mac:
+Manual checks after installing revision 6 on the target Mac:
 
 - Run `curl -4 https://api.ipify.org` and `ssh` from iTerm2, a nested shell and another terminal. Confirm the popup names the actual socket owner, appears promptly and routes each connection as selected.
 - Enable the unlisted-process option and launch the same unlisted executable twice. Confirm one prompt per run, including a background or helper process. Confirm local IPv4 traffic does not trigger the popup.

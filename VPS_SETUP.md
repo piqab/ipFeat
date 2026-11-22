@@ -1,42 +1,26 @@
-# Your own public IPv4 endpoint on a VPS
+# VPS setup for ipFeat
 
-IP Informer accepts plain text such as `203.0.113.10` or JSON such as `{"ip":"203.0.113.10"}`.
+ipFeat can create a matching sing-box client and server configuration for a new Linux VPS. The server must have public IPv4, systemd, Bash, `tar`, and `sha256sum`. The installer supports `x86_64` and `aarch64`/`arm64`. It can install `curl` and a JSON parser with the host package manager when needed.
 
-## DNS
+## Create a connection
 
-Create an `A` record for a name such as `ip.example.com` pointing to the VPS IPv4 address. Omit an `AAAA` record if you want this hostname to resolve only to IPv4.
+1. Open **sing-box → Client connections → New server**.
+2. Enter the VPS IPv4 address and SSH port. Choose a protocol and its TLS or Reality settings.
+3. Review and validate both JSON files. The wizard pins the selected official sing-box version to both sides.
+4. Install over SSH, or copy one of the manual installation scripts.
 
-## Nginx on Ubuntu or Debian
+The SSH installation window shows each command, remote output, and exit status. After installation, ipFeat opens a separate SSH session and verifies the config hash, binary version, files, and active and enabled systemd unit. A failed or interrupted check leaves the connection pending so it can be completed later.
 
-```sh
-sudo apt update
-sudo apt install nginx certbot python3-certbot-nginx
-```
+## Manual installation
 
-Create `/etc/nginx/sites-available/ip-endpoint`:
+**Copy VPS installation script** creates a standalone script for the VPS. Run it as root on the VPS. **Copy host installation script** creates a self-contained script for a Mac or Linux computer that can reach both GitHub and the VPS. The host script downloads the official release over IPv4, checks its published SHA-256 digest, and transfers the archive and installer over SSH.
 
-```nginx
-server {
-    listen 80;
-    server_name ip.example.com;
+Successful manual installation prints an `IPFEAT_INSTALL_OK` line. Paste that full line into **sing-box → Client connections → Pending manual installations → Complete installation**. The receipt must match the saved installation ID, sing-box version, and server JSON hash. The connection remains marked **Installation not verified** until ipFeat checks it directly over SSH.
 
-    access_log off;
-    default_type text/plain;
+The copied scripts contain the server JSON and credentials. Keep them private and remove unused copies when finished.
 
-    location / {
-        return 200 "$remote_addr\n";
-    }
-}
-```
+## Existing servers
 
-Enable the site and HTTPS:
+Open **Installation / Check…** for a saved connection to inspect the service and its recent journal. If it finds a verified `ipinformer-sing-box` service from IP Informer, use **Migrate previous service to ipFeat** with SSH authorization. The migration copies the config and binary, switches systemd to `ipfeat-sing-box`, verifies the new service, and restores the old service if startup fails. The old server files remain as a rollback copy until ipFeat removes the migrated service. Remote deletion also recognizes the old service name.
 
-```sh
-sudo ln -s /etc/nginx/sites-available/ip-endpoint /etc/nginx/sites-enabled/ip-endpoint
-sudo nginx -t
-sudo systemctl reload nginx
-sudo certbot --nginx -d ip.example.com
-curl https://ip.example.com
-```
-
-After verifying the response, add `https://ip.example.com` as a custom source in IP Informer settings. This endpoint is designed to reveal a visitor's public IP; `access_log off` prevents storing it in a separate Nginx access log.
+**Client JSON** and **Share QRS** provide standalone client configurations. QRS includes client credentials and enabled global domain routes. Reimport it after changing domain routes on the Mac. The official sing-box Android client uses the Android device's own network for `direct`.

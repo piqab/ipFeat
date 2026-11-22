@@ -8,15 +8,41 @@ fi
 
 SCRIPT_DIR="${0:A:h}"
 RESOURCE_DIR="${SCRIPT_DIR:h}"
-ENGINES="/Library/Application Support/IPInformer/engines"
+ENGINES="/Library/Application Support/ipFeat/engines"
+OLD_ENGINES="/Library/Application Support/IPInformer/engines"
 CURRENT="$ENGINES/current"
-PATCH_TARGET="$ENGINES/1.14.4-ipinformer-6/sing-box"
-LEGACY_TARGETS=("$ENGINES/1.14.4-ipinformer-1/sing-box" "$ENGINES/1.14.4-ipinformer-2/sing-box" "$ENGINES/1.14.4-ipinformer-3/sing-box" "$ENGINES/1.14.4-ipinformer-4/sing-box")
-PREVIOUS_FILE="$ENGINES/ipinformer-previous"
+PATCH_TARGET="$ENGINES/1.14.4-ipfeat-6/sing-box"
+LEGACY_TARGETS=("$ENGINES"/1.14.4-ipinformer-{1..6}/sing-box "$ENGINES"/1.14.4-ipfeat-{1..5}/sing-box)
+PREVIOUS_FILE="$ENGINES/ipfeat-previous"
 INSTALLER="$SCRIPT_DIR/install-network-service.sh"
 TARGET_USER="${SUDO_USER:-$(/usr/bin/stat -f %Su /dev/console)}"
 TARGET_HOME=$(/usr/bin/dscl . -read "/Users/$TARGET_USER" NFSHomeDirectory | /usr/bin/awk '{print $2}')
-USER_CONFIG="$TARGET_HOME/Library/Application Support/IPInformer"
+USER_CONFIG="$TARGET_HOME/Library/Application Support/ipFeat"
+
+# Preserve the old engine and its official rollback binary before changing the
+# active symlink. Service migration happens later in install-network-service.sh.
+if [[ -d "$OLD_ENGINES" ]]; then
+    /bin/mkdir -p "$ENGINES"
+    for item in "$OLD_ENGINES"/*; do
+        [[ -e "$item" || -L "$item" ]] || continue
+        target="$ENGINES/${item:t}"
+        [[ -e "$target" || -L "$target" ]] || /usr/bin/ditto "$item" "$target"
+    done
+fi
+if [[ -L "$CURRENT" ]]; then
+    old_target=$(/usr/bin/readlink "$CURRENT")
+    if [[ "$old_target" == "$OLD_ENGINES"/* ]]; then
+        /bin/ln -sfn "$ENGINES${old_target#$OLD_ENGINES}" "$CURRENT"
+    fi
+fi
+if [[ ! -f "$PREVIOUS_FILE" && -f "$ENGINES/ipinformer-previous" ]]; then
+    previous=$(/bin/cat "$ENGINES/ipinformer-previous")
+    if [[ "$previous" == "$OLD_ENGINES"/* ]]; then
+        previous="$ENGINES${previous#$OLD_ENGINES}"
+    fi
+    /bin/echo "$previous" > "$PREVIOUS_FILE"
+    /bin/chmod 600 "$PREVIOUS_FILE"
+fi
 
 switch_current() {
     /bin/rm -f "$CURRENT.new"
@@ -33,25 +59,25 @@ is_legacy_target() {
 }
 
 if [[ "$1" == "--install" ]]; then
-    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-6"
-    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipinformer-6.sha256"
+    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-6"
+    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-6.sha256"
     [[ -x "$BUNDLED" && -f "$HASH_FILE" ]] || { echo "Patched sing-box is not bundled"; exit 1; }
     EXPECTED=$(/bin/cat "$HASH_FILE")
     ACTUAL=$(/usr/bin/shasum -a 256 "$BUNDLED" | /usr/bin/awk '{print $1}')
     [[ "$EXPECTED" == "$ACTUAL" ]] || { echo "Patched sing-box checksum mismatch"; exit 1; }
-    "$BUNDLED" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-6' || {
+    "$BUNDLED" version | /usr/bin/grep -Fq 'ipFeat patch: 1.14.4-6' || {
         echo "Wrong patched sing-box version"; exit 1
     }
     [[ -f "$USER_CONFIG/sing-box-base.json" && -f "$USER_CONFIG/sing-box-policy.json" ]] || {
-        echo "Open IP Informer once to create live configuration"; exit 1
+        echo "Open ipFeat once to create live configuration"; exit 1
     }
     "$BUNDLED" check -c "$USER_CONFIG/sing-box-base.json" \
-        --ipinformer-policy "$USER_CONFIG/sing-box-policy.json"
+        --ipfeat-policy "$USER_CONFIG/sing-box-policy.json"
     CURRENT_BEFORE=""
     if [[ -L "$CURRENT" ]]; then
         CURRENT_BEFORE=$(/usr/bin/readlink "$CURRENT")
         if [[ "$CURRENT_BEFORE" == "$PATCH_TARGET" ]]; then
-            echo "IP Informer sing-box patch 1.14.4-6 is already active"
+            echo "ipFeat sing-box patch 1.14.4-6 is already active"
             exit 0
         fi
         if is_legacy_target "$CURRENT_BEFORE"; then
@@ -61,9 +87,9 @@ if [[ "$1" == "--install" ]]; then
             PREVIOUS="$CURRENT_BEFORE"
         fi
     elif [[ -x "$CURRENT" ]]; then
-        /usr/bin/install -d -m 755 "$ENGINES/ipinformer-before-patch"
-        /usr/bin/install -o root -g wheel -m 755 "$CURRENT" "$ENGINES/ipinformer-before-patch/sing-box"
-        PREVIOUS="$ENGINES/ipinformer-before-patch/sing-box"
+        /usr/bin/install -d -m 755 "$ENGINES/ipfeat-before-patch"
+        /usr/bin/install -o root -g wheel -m 755 "$CURRENT" "$ENGINES/ipfeat-before-patch/sing-box"
+        PREVIOUS="$ENGINES/ipfeat-before-patch/sing-box"
     elif [[ -x /opt/homebrew/bin/sing-box ]]; then
         PREVIOUS=/opt/homebrew/bin/sing-box
     elif [[ -x /usr/local/bin/sing-box ]]; then
@@ -72,21 +98,20 @@ if [[ "$1" == "--install" ]]; then
         echo "No official sing-box is available for rollback"; exit 1
     fi
     [[ -x "$PREVIOUS" ]] || { echo "Previous sing-box is missing"; exit 1; }
-    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipinformer-6"
+    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipfeat-6"
     /usr/bin/install -o root -g wheel -m 755 "$BUNDLED" "$PATCH_TARGET"
     /bin/echo "$PREVIOUS" > "$PREVIOUS_FILE"
     /bin/chmod 600 "$PREVIOUS_FILE"
     switch_current "$PATCH_TARGET"
     if ! /bin/zsh "$INSTALLER"; then
         switch_current "${CURRENT_BEFORE:-$PREVIOUS}"
-        /bin/zsh "$INSTALLER" || true
         echo "Patch installation failed; previous sing-box restored"
         exit 1
     fi
     if is_legacy_target "$CURRENT_BEFORE"; then
-        /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3" "$ENGINES/1.14.4-ipinformer-4"
+        /bin/rm -rf "$ENGINES/1.14.4-ipfeat-1" "$ENGINES/1.14.4-ipfeat-2" "$ENGINES/1.14.4-ipfeat-3" "$ENGINES/1.14.4-ipfeat-4"
     fi
-    echo "IP Informer sing-box patch is active"
+    echo "ipFeat sing-box patch is active"
 else
     [[ -f "$PREVIOUS_FILE" ]] || { echo "Previous sing-box path is missing"; exit 1; }
     PREVIOUS=$(/bin/cat "$PREVIOUS_FILE")
@@ -95,11 +120,10 @@ else
     switch_current "$PREVIOUS"
     if ! /bin/zsh "$INSTALLER"; then
         switch_current "$ACTIVE_TARGET"
-        /bin/zsh "$INSTALLER" || true
         echo "Official sing-box could not start; patch restored"
         exit 1
     fi
     /bin/rm -f "$PREVIOUS_FILE"
-    /bin/rm -rf "$ENGINES/1.14.4-ipinformer-1" "$ENGINES/1.14.4-ipinformer-2" "$ENGINES/1.14.4-ipinformer-3" "$ENGINES/1.14.4-ipinformer-4" "$ENGINES/1.14.4-ipinformer-5" "$ENGINES/1.14.4-ipinformer-6"
+    /bin/rm -rf "$ENGINES/1.14.4-ipfeat-1" "$ENGINES/1.14.4-ipfeat-2" "$ENGINES/1.14.4-ipfeat-3" "$ENGINES/1.14.4-ipfeat-4" "$ENGINES/1.14.4-ipfeat-5" "$ENGINES/1.14.4-ipfeat-6"
     echo "Official sing-box is active"
 fi

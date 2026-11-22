@@ -3,26 +3,26 @@
 import PackageDescription
 
 let package = Package(
-    name: "IPInformer",
+    name: "ipFeat",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "IPInformer", targets: ["IPInformer"]),
-        .executable(name: "IPInformerUpdater", targets: ["IPInformerUpdater"])
+        .executable(name: "ipFeat", targets: ["ipFeat"]),
+        .executable(name: "ipFeatUpdater", targets: ["ipFeatUpdater"])
     ],
     targets: [
         .executableTarget(
-            name: "IPInformer",
-            path: "Sources/IPInformer",
+            name: "ipFeat",
+            path: "Sources/ipFeat",
             linkerSettings: [.linkedLibrary("z")]
         ),
         .executableTarget(
-            name: "IPInformerUpdater",
-            path: "Sources/IPInformerUpdater"
+            name: "ipFeatUpdater",
+            path: "Sources/ipFeatUpdater"
         ),
         .testTarget(
-            name: "IPInformerTests",
-            dependencies: ["IPInformer"],
-            path: "Tests/IPInformerTests"
+            name: "ipFeatTests",
+            dependencies: ["ipFeat"],
+            path: "Tests/ipFeatTests"
         )
     ]
 )
