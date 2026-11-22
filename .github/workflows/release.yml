@@ -76,7 +76,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent dist/ipFeat.app "dist/$archive"
           (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
 
-      - name: Publish prerelease
+      - name: Publish release
         if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,6 +90,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "ipFeat $VERSION" \
-            --notes "Pre-release for local testing. This build is signed ad hoc and is not notarized for standard macOS distribution." \
-            --generate-notes \
-            --prerelease
+            --notes "macOS arm64 build. This app is signed ad hoc and is not notarized. If macOS blocks the first launch, follow Apple's Open Anyway steps in System Settings > Privacy & Security: https://support.apple.com/en-us/102445" \
+            --generate-notes
