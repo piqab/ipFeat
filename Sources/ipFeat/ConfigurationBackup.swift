@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 struct ConfigurationBackup: Codable {
-    var version = 3
+    var version = 4
     var routing: RoutingConfiguration
     var sources: [IPSource]? = nil
     var checkInterval: Double? = nil
@@ -16,6 +16,7 @@ struct ConfigurationBackup: Codable {
     var processAISettings: ProcessAISettingsSnapshot? = nil
     var preferredAppLanguage: String? = nil
     var pendingServerInstallations: [PendingServerInstallation]? = nil
+    var trafficStats: TrafficSnapshot? = TrafficSnapshot()
 }
 
 private struct EncryptedBackup: Codable {
@@ -84,13 +85,18 @@ enum ConfigurationArchive {
               let backup = try? JSONDecoder().decode(ConfigurationBackup.self, from: plaintext) else {
             throw BackupError.wrongPasswordOrCorrupt
         }
-        guard (1...3).contains(backup.version) else { throw BackupError.unsupportedVersion }
+        guard (1...4).contains(backup.version) else { throw BackupError.unsupportedVersion }
         try validateContents(backup)
         return backup
     }
 
     static func validateContents(_ backup: ConfigurationBackup) throws {
-        guard (1...3).contains(backup.version) else { throw BackupError.unsupportedVersion }
+        guard (1...4).contains(backup.version) else { throw BackupError.unsupportedVersion }
+        if backup.version >= 4 {
+            guard backup.trafficStats?.valid() == true else {
+                throw BackupError.incompleteArchive(AppLanguage.localized("Traffic statistics are missing or damaged"))
+            }
+        }
         guard backup.version >= 2 else { return }
         let secrets = backup.serverConfigurations ?? [:]
         for connection in backup.routing.clientConnections where secrets[connection.id.uuidString] == nil {

@@ -55,6 +55,7 @@ enum LocalSingBoxPatch {
         guard (try? FileManager.default.destinationOfSymbolicLink(atPath: currentPath)) != nil,
               FileManager.default.isExecutableFile(atPath: currentPath) else { return nil }
         let target = URL(fileURLWithPath: currentPath).resolvingSymlinksInPath().path
+        if target == "\(engineDirectory)/1.14.4-ipfeat-7/sing-box" { return 7 }
         if target == "\(engineDirectory)/1.14.4-ipfeat-6/sing-box" { return 6 }
         if target == "\(engineDirectory)/1.14.4-ipfeat-5/sing-box" { return 5 }
         if target == "\(engineDirectory)/1.14.4-ipfeat-4/sing-box" { return 4 }
@@ -316,7 +317,7 @@ final class EngineManager: ObservableObject {
     }
 
     func installPatch() async {
-        guard !isInstalling, activePatchRevision != 5 else { return }
+        guard !isInstalling, activePatchRevision != 7 else { return }
         autoInstall = false
         await switchPatch(mode: "--install")
     }
@@ -340,7 +341,7 @@ final class EngineManager: ObservableObject {
         }.value
         isInstalling = false
         refreshLocalState()
-        message = result.success ? (mode == "--install" ? "ipFeat sing-box patch 1.14.4-6 installed" : "Official sing-box restored")
+        message = result.success ? (mode == "--install" ? "ipFeat sing-box patch 1.14.4-7 installed" : "Official sing-box restored")
             : (result.output.isEmpty ? AppLanguage.localized("Операция отменена или завершилась ошибкой") : result.output)
     }
 

@@ -26,12 +26,12 @@ else
     /usr/bin/tar -xzf "$WORK/source.tar.gz" -C "$WORK"
     /bin/mv "$WORK/sing-box-$REVISION" "$WORK/source"
 fi
-/usr/bin/git -C "$WORK/source" apply --check "$ROOT_DIR/patches/sing-box-1.14.4-ipfeat-6.patch"
-/usr/bin/git -C "$WORK/source" apply "$ROOT_DIR/patches/sing-box-1.14.4-ipfeat-6.patch"
+/usr/bin/git -C "$WORK/source" apply --check "$ROOT_DIR/patches/sing-box-1.14.4-ipfeat-7.patch"
+/usr/bin/git -C "$WORK/source" apply "$ROOT_DIR/patches/sing-box-1.14.4-ipfeat-7.patch"
 
 TAGS='with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_usbip,with_openvpn,with_openconnect'
 cd "$WORK/source"
 GOTOOLCHAIN=auto go build -trimpath -tags "$TAGS" \
     -ldflags '-X github.com/sagernet/sing-box/constant.Version=1.14.4 -s -w' \
     -o "$OUTPUT" ./cmd/sing-box
-"$OUTPUT" version | /usr/bin/grep -F 'ipFeat patch: 1.14.4-6'
+"$OUTPUT" version | /usr/bin/grep -F 'ipFeat patch: 1.14.4-7'

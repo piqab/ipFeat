@@ -114,6 +114,10 @@ final class ConfigurationBackupTests: XCTestCase {
             sshPort: 2222, architecture: "amd64", version: "1.12.0", protocolName: "vless",
             outboundTag: "server-pending", clientJSON: #"{"type":"vless"}"#,
             serverJSON: #"{"inbounds":[]}"#, createdAt: Date(timeIntervalSince1970: 2))
+        let traffic = TrafficSnapshot(sources: [TrafficDocument(version: 1, id: UUID().uuidString,
+            updatedAt: "2026-11-24T12:00:00Z", entries: [TrafficEntry(day: "2026-11-24", route: "proxy",
+                paths: ["/usr/bin/curl"], upload: 42, download: 84)])],
+            routeResets: ["proxy": ["2026-11-24": TrafficBytes(upload: 10, download: 20)]])
         var backup = ConfigurationBackup(
             routing: routing,
             launchAtLogin: true,
@@ -124,7 +128,7 @@ final class ConfigurationBackupTests: XCTestCase {
                 profiles: [aiProfile], selectedProfileID: aiProfile.id,
                 keys: [aiProfile.id.uuidString: "ai-test-secret"]),
             preferredAppLanguage: "zh-Hans",
-            pendingServerInstallations: [pending]
+            pendingServerInstallations: [pending], trafficStats: traffic
         )
         backup.sources = [IPSource(id: UUID(), name: "Retired checker", url: "https://example.com/ip",
                                    isEnabled: true, isBuiltIn: false)]
@@ -152,6 +156,7 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertEqual(decoded.processAISettings?.profiles, [aiProfile])
         XCTAssertEqual(decoded.processAISettings?.keys[aiProfile.id.uuidString], "ai-test-secret")
         XCTAssertEqual(decoded.pendingServerInstallations, [pending])
+        XCTAssertEqual(decoded.trafficStats, traffic)
         XCTAssertThrowsError(try ConfigurationArchive.decrypt(encrypted, password: "wrong password"))
 
         var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: encrypted) as? [String: Any])
@@ -199,6 +204,17 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertEqual(restored.version, 2)
         XCTAssertEqual(restored.sources?.first?.name, "Old source")
         XCTAssertEqual(restored.checkInterval, 60)
+    }
+
+    func testVersionThreeArchiveWithoutTrafficRemainsReadable() throws {
+        var backup = ConfigurationBackup(routing: RoutingConfiguration(), launchAtLogin: false,
+                                         configurationHistory: [])
+        backup.version = 3
+        backup.trafficStats = nil
+        let encrypted = try ConfigurationArchive.encrypt(backup, password: "strong-password")
+        let restored = try ConfigurationArchive.decrypt(encrypted, password: "strong-password")
+        XCTAssertEqual(restored.version, 3)
+        XCTAssertNil(restored.trafficStats)
     }
 
     func testNewArchiveRejectsPendingInstallationThatIsAlreadyRegistered() throws {
