@@ -43,6 +43,11 @@ while true; do
 
     LAST_HASH=$(/usr/bin/shasum -a 256 "$CONFIG" | /usr/bin/awk '{print $1}')
     log_message "starting sing-box"
+    if [[ -n "$LIVE_POLICY" ]]; then
+        export IPFEAT_TRAFFIC_PATH="${LIVE_POLICY:h}/traffic-stats.json"
+    else
+        unset IPFEAT_TRAFFIC_PATH
+    fi
     "$SING_BOX" run "${ARGS[@]}" &
     CHILD_PID=$!
 

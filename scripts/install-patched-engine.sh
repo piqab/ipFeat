@@ -11,8 +11,8 @@ RESOURCE_DIR="${SCRIPT_DIR:h}"
 ENGINES="/Library/Application Support/ipFeat/engines"
 OLD_ENGINES="/Library/Application Support/IPInformer/engines"
 CURRENT="$ENGINES/current"
-PATCH_TARGET="$ENGINES/1.14.4-ipfeat-6/sing-box"
-LEGACY_TARGETS=("$ENGINES"/1.14.4-ipinformer-{1..6}/sing-box "$ENGINES"/1.14.4-ipfeat-{1..5}/sing-box)
+PATCH_TARGET="$ENGINES/1.14.4-ipfeat-7/sing-box"
+LEGACY_TARGETS=("$ENGINES"/1.14.4-ipinformer-{1..6}/sing-box "$ENGINES"/1.14.4-ipfeat-{1..6}/sing-box)
 PREVIOUS_FILE="$ENGINES/ipfeat-previous"
 INSTALLER="$SCRIPT_DIR/install-network-service.sh"
 TARGET_USER="${SUDO_USER:-$(/usr/bin/stat -f %Su /dev/console)}"
@@ -59,13 +59,13 @@ is_legacy_target() {
 }
 
 if [[ "$1" == "--install" ]]; then
-    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-6"
-    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-6.sha256"
+    BUNDLED="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-7"
+    HASH_FILE="$RESOURCE_DIR/engines/sing-box-1.14.4-ipfeat-7.sha256"
     [[ -x "$BUNDLED" && -f "$HASH_FILE" ]] || { echo "Patched sing-box is not bundled"; exit 1; }
     EXPECTED=$(/bin/cat "$HASH_FILE")
     ACTUAL=$(/usr/bin/shasum -a 256 "$BUNDLED" | /usr/bin/awk '{print $1}')
     [[ "$EXPECTED" == "$ACTUAL" ]] || { echo "Patched sing-box checksum mismatch"; exit 1; }
-    "$BUNDLED" version | /usr/bin/grep -Fq 'ipFeat patch: 1.14.4-6' || {
+    "$BUNDLED" version | /usr/bin/grep -Fq 'ipFeat patch: 1.14.4-7' || {
         echo "Wrong patched sing-box version"; exit 1
     }
     [[ -f "$USER_CONFIG/sing-box-base.json" && -f "$USER_CONFIG/sing-box-policy.json" ]] || {
@@ -77,7 +77,7 @@ if [[ "$1" == "--install" ]]; then
     if [[ -L "$CURRENT" ]]; then
         CURRENT_BEFORE=$(/usr/bin/readlink "$CURRENT")
         if [[ "$CURRENT_BEFORE" == "$PATCH_TARGET" ]]; then
-            echo "ipFeat sing-box patch 1.14.4-6 is already active"
+            echo "ipFeat sing-box patch 1.14.4-7 is already active"
             exit 0
         fi
         if is_legacy_target "$CURRENT_BEFORE"; then
@@ -98,7 +98,7 @@ if [[ "$1" == "--install" ]]; then
         echo "No official sing-box is available for rollback"; exit 1
     fi
     [[ -x "$PREVIOUS" ]] || { echo "Previous sing-box is missing"; exit 1; }
-    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipfeat-6"
+    /usr/bin/install -d -m 755 "$ENGINES/1.14.4-ipfeat-7"
     /usr/bin/install -o root -g wheel -m 755 "$BUNDLED" "$PATCH_TARGET"
     /bin/echo "$PREVIOUS" > "$PREVIOUS_FILE"
     /bin/chmod 600 "$PREVIOUS_FILE"
@@ -124,6 +124,6 @@ else
         exit 1
     fi
     /bin/rm -f "$PREVIOUS_FILE"
-    /bin/rm -rf "$ENGINES/1.14.4-ipfeat-1" "$ENGINES/1.14.4-ipfeat-2" "$ENGINES/1.14.4-ipfeat-3" "$ENGINES/1.14.4-ipfeat-4" "$ENGINES/1.14.4-ipfeat-5" "$ENGINES/1.14.4-ipfeat-6"
+    /bin/rm -rf "$ENGINES/1.14.4-ipfeat-1" "$ENGINES/1.14.4-ipfeat-2" "$ENGINES/1.14.4-ipfeat-3" "$ENGINES/1.14.4-ipfeat-4" "$ENGINES/1.14.4-ipfeat-5" "$ENGINES/1.14.4-ipfeat-6" "$ENGINES/1.14.4-ipfeat-7"
     echo "Official sing-box is active"
 fi

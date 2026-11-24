@@ -24,6 +24,9 @@ struct SettingsView: View {
             ProcessAISettingsView()
                 .tabItem { Label("AI", systemImage: "questionmark.bubble") }
                 .tag(3)
+            TrafficStatisticsView(store: routingStore)
+                .tabItem { Label("Traffic", systemImage: "chart.bar.xaxis") }
+                .tag(4)
         }
         .frame(width: 820, height: 620)
         .environment(\.locale, preferredAppLanguage == AppLanguage.system.rawValue

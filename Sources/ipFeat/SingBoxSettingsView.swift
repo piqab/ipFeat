@@ -210,15 +210,15 @@ struct SingBoxSettingsView: View {
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.isPatched && engine.activePatchRevision != 5
-                     ? "Patch 1.14.4-6 keeps route prompts open and applies saved process route changes immediately."
+                Text(engine.isPatched && engine.activePatchRevision != 7
+                     ? "Patch 1.14.4-7 adds persistent traffic counters and keeps route prompts open."
                      : engine.isPatched
-                       ? "Patch 1.14.4-6 active · route prompts stay open until you choose."
-                       : "Patch 1.14.4-6 adds live rules and persistent route prompts.")
+                       ? "Patch 1.14.4-7 active · traffic is counted even when this window is closed."
+                       : "Patch 1.14.4-7 adds live rules, route prompts and traffic counters.")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
-                    if engine.activePatchRevision != 5 {
+                    if engine.activePatchRevision != 7 {
                         Button("Update patch") { Task { await engine.installPatch(); await service.refresh() } }
                             .disabled(engine.isInstalling)
                     }
@@ -474,7 +474,7 @@ struct SingBoxSettingsView: View {
     private var archiveSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Перенос на другой Mac").font(.headline)
-            Text("The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.")
+            Text("The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Экспортировать с паролем…") { beginArchive(.export) }
@@ -588,7 +588,8 @@ struct SingBoxSettingsView: View {
                 serverConfigurations: try ServerSecretStore.allRequired(for: store.configuration.clientConnections),
                 processAISettings: try ProcessAISettings.shared.snapshot(),
                 preferredAppLanguage: defaults.string(forKey: AppLanguage.preferenceKey),
-                pendingServerInstallations: try PendingServerInstallationStore.allChecked()
+                pendingServerInstallations: try PendingServerInstallationStore.allChecked(),
+                trafficStats: try TrafficStatistics.shared.archive(applications: store.configuration.applications)
             )
             let encrypted = try ConfigurationArchive.encrypt(backup, password: password)
             let panel = NSSavePanel()
@@ -632,6 +633,7 @@ struct SingBoxSettingsView: View {
         try ConfigurationArchive.validateContents(backup)
         let priorAI = try backup.processAISettings.map { _ in try ProcessAISettings.shared.snapshot() }
         let priorPending = try backup.version >= 2 ? PendingServerInstallationStore.allChecked() : nil
+        let priorTraffic = try backup.version >= 4 ? TrafficStatistics.shared.archive() : nil
         var incomingSecrets: [UUID: String] = [:]
         for (rawID, json) in backup.serverConfigurations ?? [:] {
             guard let id = UUID(uuidString: rawID) else {
@@ -655,10 +657,17 @@ struct SingBoxSettingsView: View {
             if backup.version >= 2 {
                 try PendingServerInstallationStore.replaceAll(with: backup.pendingServerInstallations ?? [])
             }
+            if backup.version >= 4, let traffic = backup.trafficStats {
+                try TrafficStatistics.shared.restore(traffic)
+            }
             return try store.restoreConfiguration(backup.routing, history: backup.configurationHistory)
         } catch {
             let originalError = error
             var rollbackErrors: [String] = []
+            if let priorTraffic {
+                do { try TrafficStatistics.shared.restore(priorTraffic) }
+                catch { rollbackErrors.append("traffic statistics: \(error.localizedDescription)") }
+            }
             if let priorPending {
                 do { try PendingServerInstallationStore.replaceAll(with: priorPending) }
                 catch { rollbackErrors.append("pending VPS installations: \(error.localizedDescription)") }
