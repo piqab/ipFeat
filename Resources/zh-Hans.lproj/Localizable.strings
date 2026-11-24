@@ -438,6 +438,7 @@
 "Reset" = "重置";
 "Reset counter" = "重置计数器";
 "Reset traffic counter?" = "要重置流量计数器吗？";
+"Total traffic across all routes since the last reset; current transfer rate below." = "上次重置后所有路由的累计流量；下方显示当前传输速率。";
 "Traffic statistics are missing or damaged" = "流量统计缺失或损坏";
 "Traffic statistics are damaged or use an unsupported format." = "流量统计已损坏或格式不受支持。";
 "IPv4 traffic observed by the patched sing-box service. Upload and download are counted on the actual route. Local connections that bypass sing-box are not counted." = "已打补丁的 sing-box 服务观测到的 IPv4 流量。上传和下载按实际路由统计。绕过 sing-box 的本地连接不计入。";

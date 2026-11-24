@@ -370,6 +370,7 @@
 "Reset" = "Reset";
 "Reset counter" = "Reset counter";
 "Reset traffic counter?" = "Reset traffic counter?";
+"Total traffic across all routes since the last reset; current transfer rate below." = "Total traffic across all routes since the last reset; current transfer rate below.";
 "Traffic statistics are missing or damaged" = "Traffic statistics are missing or damaged";
 "Traffic statistics are damaged or use an unsupported format." = "Traffic statistics are damaged or use an unsupported format.";
 "IPv4 traffic observed by the patched sing-box service. Upload and download are counted on the actual route. Local connections that bypass sing-box are not counted." = "IPv4 traffic observed by the patched sing-box service. Upload and download are counted on the actual route. Local connections that bypass sing-box are not counted.";

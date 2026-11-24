@@ -61,3 +61,5 @@ The local patched engine is pinned to sing-box `1.14.4-7`. Automatic installatio
 ## Traffic statistics
 
 The **Traffic** tab shows IPv4 upload and download by actual outbound route and registered program for today, this month, or all time. Each route and program has its own reset button. The patched service checkpoints counters every two seconds, including while the ipFeat window is closed. Verified child processes count under their nearest registered parent. Unknown owners remain in route totals. Only traffic handled by sing-box is counted; local or other traffic that bypasses its TUN is outside these figures. Statistics include byte counts and executable paths but no destination addresses, domains, or packet contents.
+
+Each program row in **Programs** also shows total download and upload across all routes since that program's last reset, plus current download and upload rates. The row has an individual reset button. Both views use the same counters.

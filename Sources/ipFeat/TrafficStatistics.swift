@@ -117,6 +117,7 @@ final class TrafficStatistics: ObservableObject {
             }
             let current = try JSONDecoder().decode(TrafficDocument.self, from: Data(contentsOf: Self.liveURL))
             guard TrafficSnapshot(sources: [current]).valid() else { throw TrafficStatisticsError.invalidData }
+            if let lastLive, lastLive.id == current.id, lastLive.updatedAt == current.updatedAt { return }
             let now = Date()
             let seconds = now.timeIntervalSince(lastRefresh)
             if let lastLive, lastLive.id == current.id, seconds > 0 {
@@ -134,6 +135,9 @@ final class TrafficStatistics: ObservableObject {
                 }
                 routeRates = newRouteRates
                 applicationRates = newAppRates
+            } else {
+                routeRates = [:]
+                applicationRates = [:]
             }
             live = current
             lastLive = current
@@ -248,17 +252,40 @@ final class TrafficStatistics: ObservableObject {
 
     static func owner(of entry: TrafficEntry, applications: [RoutedApplication],
                       aliases: [String: [String]] = [:]) -> UUID? {
+        owner(of: entry, matchers: ownerMatchers(applications: applications, aliases: aliases))
+    }
+
+    private static func ownerMatchers(applications: [RoutedApplication],
+                                      aliases: [String: [String]]) -> [(id: UUID, paths: [String])] {
+        applications.map { app in
+            let bundle = URL(fileURLWithPath: app.bundlePath).standardizedFileURL
+            let executable = URL(fileURLWithPath: app.executablePath).standardizedFileURL
+            return (app.id, Array(Set([bundle.path, bundle.resolvingSymlinksInPath().path,
+                                       executable.path, executable.resolvingSymlinksInPath().path]
+                                      + (aliases[app.id.uuidString] ?? []))))
+        }
+    }
+
+    private static func owner(of entry: TrafficEntry, matchers: [(id: UUID, paths: [String])],
+                              matched: inout [String: UUID], unmatched: inout Set<String>) -> UUID? {
         for path in entry.paths {
-            for app in applications {
-                let bundle = URL(fileURLWithPath: app.bundlePath).standardizedFileURL
-                let paths = [bundle.path, bundle.resolvingSymlinksInPath().path, app.executablePath]
-                    + (aliases[app.id.uuidString] ?? [])
-                if paths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
-                    return app.id
-                }
+            if let cached = matched[path] { return cached }
+            if unmatched.contains(path) { continue }
+            if let app = matchers.first(where: { matcher in
+                matcher.paths.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
+            }) {
+                matched[path] = app.id
+                return app.id
             }
+            unmatched.insert(path)
         }
         return nil
+    }
+
+    private static func owner(of entry: TrafficEntry, matchers: [(id: UUID, paths: [String])]) -> UUID? {
+        var matched: [String: UUID] = [:]
+        var unmatched: Set<String> = []
+        return owner(of: entry, matchers: matchers, matched: &matched, unmatched: &unmatched)
     }
 
     private static func aggregate(_ entries: [TrafficEntry], applications: [RoutedApplication],
@@ -266,11 +293,15 @@ final class TrafficStatistics: ObservableObject {
         (routes: [String: [String: TrafficBytes]], applications: [UUID: [String: TrafficBytes]]) {
         var routes: [String: [String: TrafficBytes]] = [:]
         var apps: [UUID: [String: TrafficBytes]] = [:]
+        let matchers = ownerMatchers(applications: applications, aliases: aliases)
+        var matchedPaths: [String: UUID] = [:]
+        var unmatchedPaths: Set<String> = []
         for entry in entries {
             var routeDays = routes[entry.route] ?? [:]
             routeDays[entry.day] = (routeDays[entry.day] ?? TrafficBytes()) + entry.bytes
             routes[entry.route] = routeDays
-            if let id = owner(of: entry, applications: applications, aliases: aliases) {
+            if let id = owner(of: entry, matchers: matchers,
+                              matched: &matchedPaths, unmatched: &unmatchedPaths) {
                 var appDays = apps[id] ?? [:]
                 appDays[entry.day] = (appDays[entry.day] ?? TrafficBytes()) + entry.bytes
                 apps[id] = appDays

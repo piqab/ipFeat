@@ -200,6 +200,7 @@
 "Reset" = "Сбросить";
 "Reset counter" = "Сбросить счётчик";
 "Reset traffic counter?" = "Сбросить счётчик трафика?";
+"Total traffic across all routes since the last reset; current transfer rate below." = "Суммарный трафик по всем маршрутам после последнего сброса; ниже текущая скорость передачи.";
 "Traffic statistics are missing or damaged" = "Статистика трафика отсутствует или повреждена";
 "Traffic statistics are damaged or use an unsupported format." = "Статистика трафика повреждена или имеет неподдерживаемый формат.";
 "IPv4 traffic observed by the patched sing-box service. Upload and download are counted on the actual route. Local connections that bypass sing-box are not counted." = "IPv4-трафик, проходящий через службу sing-box с патчем. Отправка и получение учитываются по фактическому маршруту. Локальные соединения в обход sing-box не учитываются.";

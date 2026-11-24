@@ -41,6 +41,11 @@ struct RoutingSettingsView: View {
     @State private var selectedApplicationIDs: Set<UUID> = []
     @State private var selectedProcessRouteIDs: Set<UUID> = []
     @State private var selectedCommandIDs: Set<UUID> = []
+    @ObservedObject private var traffic = TrafficStatistics.shared
+    @State private var isProgramsVisible = false
+    @State private var trafficResetApplication: RoutedApplication?
+    @State private var trafficResetError: String?
+    private let trafficTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ScrollView {
@@ -69,6 +74,33 @@ struct RoutingSettingsView: View {
                                  })) { updated in
                 try store.saveDomainRule(updated)
             }
+        }
+        .onAppear {
+            if case .programs = section {
+                isProgramsVisible = true
+                traffic.refresh(applications: store.configuration.applications)
+            }
+        }
+        .onDisappear { isProgramsVisible = false }
+        .onReceive(trafficTimer) { _ in
+            if isProgramsVisible { traffic.refresh(applications: store.configuration.applications) }
+        }
+        .confirmationDialog("Reset traffic counter?", isPresented: Binding(
+            get: { trafficResetApplication != nil },
+            set: { if !$0 { trafficResetApplication = nil } }
+        ), titleVisibility: .visible) {
+            Button("Reset counter", role: .destructive) {
+                if let application = trafficResetApplication {
+                    do {
+                        traffic.refresh(applications: store.configuration.applications)
+                        try traffic.resetApplication(application, applications: store.configuration.applications)
+                        trafficResetError = nil
+                    } catch { trafficResetError = error.localizedDescription }
+                }
+                trafficResetApplication = nil
+            }
+        } message: {
+            Text(trafficResetApplication?.name ?? "")
         }
     }
 
@@ -289,7 +321,9 @@ struct RoutingSettingsView: View {
     }
 
     private var applicationsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let applicationTraffic = traffic.totals(applications: store.configuration.applications,
+                                                period: .all, today: TrafficStatistics.todayString()).applications
+        return VStack(alignment: .leading, spacing: 8) {
             TextField("Search apps, groups, commands and saved processes", text: $programSearch)
                 .textFieldStyle(.roundedBorder)
             HStack {
@@ -311,6 +345,9 @@ struct RoutingSettingsView: View {
             if let processRouteError {
                 Text(processRouteError).font(.caption).foregroundStyle(.red)
             }
+            if let message = trafficResetError ?? traffic.error {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
             ForEach(store.configuration.groups.filter { group in
                 programSearch.isEmpty || group.name.localizedCaseInsensitiveContains(programSearch)
                     || store.configuration.applications.contains { $0.groupID == group.id && applicationMatchesSearch($0, query: programSearch) }
@@ -318,7 +355,7 @@ struct RoutingSettingsView: View {
                         $0.groupID == group.id && matchesSearch(processName($0), path: $0.executablePath, query: programSearch)
                     }
             }) { group in
-                groupCard(group)
+                groupCard(group, applicationTraffic: applicationTraffic)
             }
 
             if programSearch.isEmpty || !filteredUngroupedApplications.isEmpty {
@@ -339,7 +376,7 @@ struct RoutingSettingsView: View {
                 }
                 if isUngroupedExpanded || !programSearch.isEmpty {
                     ForEach(filteredUngroupedApplications) { application in
-                        applicationEditor(application)
+                        applicationEditor(application, traffic: applicationTraffic[application.id] ?? TrafficBytes())
                     }
                     if ungroupedApplications.isEmpty {
                         emptyHint("Здесь можно назначить личный профиль или использовать общий маршрут.")
@@ -465,7 +502,7 @@ struct RoutingSettingsView: View {
         commandError = store.relinkCommand(command, to: url)
     }
 
-    private func groupCard(_ group: RoutingGroup) -> some View {
+    private func groupCard(_ group: RoutingGroup, applicationTraffic: [UUID: TrafficBytes]) -> some View {
         let query = group.name.localizedCaseInsensitiveContains(programSearch) ? "" : programSearch
         let members = store.configuration.applications
             .filter { $0.groupID == group.id && applicationMatchesSearch($0, query: query) }
@@ -532,7 +569,8 @@ struct RoutingSettingsView: View {
                 if members.isEmpty && routes.isEmpty { emptyHint("Добавьте программы в группу.") }
                 ForEach(entries) { entry in
                     switch entry {
-                    case .application(let application): applicationEditor(application)
+                    case .application(let application):
+                        applicationEditor(application, traffic: applicationTraffic[application.id] ?? TrafficBytes())
                     case .process(let route): savedProcessRow(route)
                     }
                 }
@@ -767,7 +805,7 @@ struct RoutingSettingsView: View {
         }
     }
 
-    private func applicationEditor(_ application: RoutedApplication) -> some View {
+    private func applicationEditor(_ application: RoutedApplication, traffic bytes: TrafficBytes) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 selectionButton(application.id, in: $selectedApplicationIDs)
@@ -776,8 +814,24 @@ struct RoutingSettingsView: View {
                     .interpolation(.high)
                     .frame(width: 28, height: 28)
                     .accessibilityHidden(true)
-                Text(application.name).fontWeight(.medium)
-                Spacer()
+                Text(application.name).fontWeight(.medium).lineLimit(1)
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("↓ \(ByteCountFormatter.string(fromByteCount: bytes.download, countStyle: .file))  ↑ \(ByteCountFormatter.string(fromByteCount: bytes.upload, countStyle: .file))")
+                        .font(.caption.monospacedDigit())
+                    let rate = traffic.applicationRates[application.id] ?? TrafficBytes()
+                    Text("↓ \(ByteCountFormatter.string(fromByteCount: rate.download, countStyle: .file))/s  ↑ \(ByteCountFormatter.string(fromByteCount: rate.upload, countStyle: .file))/s")
+                        .font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(.secondary)
+                .fixedSize()
+                .help("Total traffic across all routes since the last reset; current transfer rate below.")
+                Button("Reset counter", systemImage: "arrow.counterclockwise") {
+                    trafficResetApplication = application
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .disabled(bytes.upload == 0 && bytes.download == 0)
                 Toggle("Enable route", isOn: applicationBinding(application, \.enabled))
                     .labelsHidden()
                     .help("Enable routing for this application")
