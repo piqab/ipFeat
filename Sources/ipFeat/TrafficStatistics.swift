@@ -20,6 +20,25 @@ struct TrafficEntry: Codable, Equatable {
     var upload: Int64
     var download: Int64
     var bytes: TrafficBytes { TrafficBytes(upload: upload, download: download) }
+
+    init(day: String, route: String, paths: [String], upload: Int64, download: Int64) {
+        self.day = day
+        self.route = route
+        self.paths = paths
+        self.upload = upload
+        self.download = download
+    }
+
+    private enum CodingKeys: String, CodingKey { case day, route, paths, upload, download }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        day = try values.decode(String.self, forKey: .day)
+        route = try values.decode(String.self, forKey: .route)
+        paths = try values.decodeIfPresent([String].self, forKey: .paths) ?? []
+        upload = try values.decode(Int64.self, forKey: .upload)
+        download = try values.decode(Int64.self, forKey: .download)
+    }
 }
 
 struct TrafficDocument: Codable, Equatable {

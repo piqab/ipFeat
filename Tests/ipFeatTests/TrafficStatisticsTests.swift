@@ -4,6 +4,16 @@ import XCTest
 
 @MainActor
 final class TrafficStatisticsTests: XCTestCase {
+    func testTrafficWithoutVerifiedOwnerRemainsInRouteTotal() throws {
+        let data = Data(#"{"version":1,"id":"sample","updatedAt":"2026-11-24T18:58:00Z","entries":[{"day":"2026-11-24","route":"proxy","paths":null,"upload":12,"download":34},{"day":"2026-11-24","route":"direct","upload":5,"download":6}]}"#.utf8)
+        let document = try JSONDecoder().decode(TrafficDocument.self, from: data)
+        XCTAssertEqual(document.entries.map(\.paths), [[], []])
+        let totals = TrafficStatistics.totals(snapshot: TrafficSnapshot(), live: document,
+                                              applications: [], period: .all, today: "2026-11-24")
+        XCTAssertEqual(totals.routes["proxy"], TrafficBytes(upload: 12, download: 34))
+        XCTAssertEqual(totals.routes["direct"], TrafficBytes(upload: 5, download: 6))
+    }
+
     func testRouteAndProgramResetsAreIndependentAcrossDays() {
         let app = RoutedApplication(id: UUID(), name: "iTerm2", bundlePath: "/Applications/iTerm.app",
                                     executablePath: "/Applications/iTerm.app/Contents/MacOS/iTerm2",
