@@ -261,11 +261,11 @@ final class ConfigurationBackupTests: XCTestCase {
         XCTAssertNil(restored.clientConnections[0].installationCheckedAt)
     }
 
-    @MainActor func testMissingCommandIsDisabledDuringRestore() {
+    @MainActor func testLegacyCommandRulesAreRemovedDuringRestore() {
         let missing = RoutedCommand(name: "missing", executablePath: "/usr/bin/ipfeat-missing-command")
         let result = RoutingStore.prepareRestoredConfiguration(RoutingConfiguration(commands: [missing]))
-        XCTAssertEqual(result.missingApplications, ["Command: missing"])
-        XCTAssertFalse(result.configuration.commands[0].enabled)
+        XCTAssertTrue(result.missingApplications.isEmpty)
+        XCTAssertTrue(result.configuration.commands.isEmpty)
     }
 
     @MainActor func testMissingSavedProcessRouteIsDisabledDuringRestore() {

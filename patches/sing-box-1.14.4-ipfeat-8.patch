@@ -1,0 +1,1886 @@
+diff --git a/adapter/platform.go b/adapter/platform.go
+index 44af9b6..db8a29c 100644
+--- a/adapter/platform.go
++++ b/adapter/platform.go
+@@ -95,11 +95,13 @@ type FindConnectionOwnerRequest struct {
+ }
+ 
+ type ConnectionOwner struct {
+-	ProcessID           uint32
+-	UserId              int32
+-	UserName            string
+-	ProcessPath         string
+-	AndroidPackageNames []string
++	ProcessID            uint32
++	ProcessStartUnixNano uint64
++	AncestorProcessPaths []string
++	UserId               int32
++	UserName             string
++	ProcessPath          string
++	AndroidPackageNames  []string
+ }
+ 
+ type Notification struct {
+diff --git a/box.go b/box.go
+index 3654fb6..3adb57e 100644
+--- a/box.go
++++ b/box.go
+@@ -3,6 +3,7 @@ package box
+ import (
+ 	"context"
+ 	"io"
++	"os"
+ 	"time"
+ 
+ 	"github.com/sagernet/sing-box/adapter"
+@@ -240,7 +241,7 @@ func New(options Options) (*Box, error) {
+ 	if err != nil {
+ 		return nil, E.Cause(err, "initialize router")
+ 	}
+-	if needClashAPI || needAPIService || options.PlatformLogWriter != nil {
++	if needClashAPI || needAPIService || options.PlatformLogWriter != nil || os.Getenv("IPFEAT_TRAFFIC_PATH") != "" {
+ 		trafficManager := trafficcontrol.NewManager()
+ 		service.MustRegisterPtr(ctx, trafficManager)
+ 		router.AppendTracker(trafficManager)
+diff --git a/cmd/sing-box/cmd.go b/cmd/sing-box/cmd.go
+index e635f5c..be2a521 100644
+--- a/cmd/sing-box/cmd.go
++++ b/cmd/sing-box/cmd.go
+@@ -18,11 +18,12 @@ import (
+ )
+ 
+ var (
+-	globalCtx         context.Context
+-	configPaths       []string
+-	configDirectories []string
+-	workingDir        string
+-	disableColor      bool
++	globalCtx            context.Context
++	configPaths          []string
++	configDirectories    []string
++	workingDir           string
++	disableColor         bool
++	ipFeatPolicyPath string
+ )
+ 
+ var mainCommand = &cobra.Command{
+@@ -35,6 +36,7 @@ func init() {
+ 	mainCommand.PersistentFlags().StringArrayVarP(&configDirectories, "config-directory", "C", nil, "set configuration directory path")
+ 	mainCommand.PersistentFlags().StringVarP(&workingDir, "directory", "D", "", "set working directory")
+ 	mainCommand.PersistentFlags().BoolVarP(&disableColor, "disable-color", "", false, "disable color output")
++	mainCommand.PersistentFlags().StringVar(&ipFeatPolicyPath, "ipfeat-policy", "", "ipFeat live routing policy file")
+ }
+ 
+ func preRun(cmd *cobra.Command, args []string) {
+diff --git a/cmd/sing-box/cmd_check.go b/cmd/sing-box/cmd_check.go
+index 5bd1093..83b3e39 100644
+--- a/cmd/sing-box/cmd_check.go
++++ b/cmd/sing-box/cmd_check.go
+@@ -2,6 +2,7 @@ package main
+ 
+ import (
+ 	"context"
++	"os"
+ 
+ 	"github.com/sagernet/sing-box"
+ 	"github.com/sagernet/sing-box/log"
+@@ -37,6 +38,13 @@ func check() error {
+ 		Options: options,
+ 	})
+ 	if err == nil {
++		if ipFeatPolicyPath != "" {
++			var data []byte
++			data, err = os.ReadFile(ipFeatPolicyPath)
++			if err == nil {
++				err = instance.Router().(interface{ ApplyipFeatRules([]byte) error }).ApplyipFeatRules(data)
++			}
++		}
+ 		instance.Close()
+ 	}
+ 	cancel()
+diff --git a/cmd/sing-box/cmd_run.go b/cmd/sing-box/cmd_run.go
+index fecd99a..fa403bd 100644
+--- a/cmd/sing-box/cmd_run.go
++++ b/cmd/sing-box/cmd_run.go
+@@ -2,6 +2,7 @@ package main
+ 
+ import (
+ 	"context"
++	"crypto/sha256"
+ 	"io"
+ 	"os"
+ 	"os/signal"
+@@ -147,6 +148,20 @@ func create(options option.Options) (*box.Box, context.CancelFunc, error) {
+ 		cancel()
+ 		return nil, nil, E.Cause(err, "create service")
+ 	}
++	var policyHash [32]byte
++	if ipFeatPolicyPath != "" {
++		var data []byte
++		data, err = os.ReadFile(ipFeatPolicyPath)
++		if err == nil {
++			err = instance.Router().(interface{ ApplyipFeatRules([]byte) error }).ApplyipFeatRules(data)
++		}
++		if err != nil {
++			_ = instance.Close()
++			cancel()
++			return nil, nil, E.Cause(err, "load ipFeat policy")
++		}
++		policyHash = sha256.Sum256(data)
++	}
+ 
+ 	osSignals := make(chan os.Signal, 1)
+ 	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+@@ -168,9 +183,38 @@ func create(options option.Options) (*box.Box, context.CancelFunc, error) {
+ 		cancel()
+ 		return nil, nil, E.Cause(err, "start service")
+ 	}
++	if ipFeatPolicyPath != "" {
++		go watchipFeatPolicy(ctx, instance.Router().(interface{ ApplyipFeatRules([]byte) error }), ipFeatPolicyPath, policyHash)
++	}
+ 	return instance, cancel, nil
+ }
+ 
++func watchipFeatPolicy(ctx context.Context, router interface{ ApplyipFeatRules([]byte) error }, path string, lastHash [32]byte) {
++	ticker := time.NewTicker(250 * time.Millisecond)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case <-ticker.C:
++		}
++		data, err := os.ReadFile(path)
++		if err != nil {
++			continue
++		}
++		hash := sha256.Sum256(data)
++		if hash == lastHash {
++			continue
++		}
++		lastHash = hash
++		if err = router.ApplyipFeatRules(data); err != nil {
++			log.Error(E.Cause(err, "apply ipFeat policy"))
++		} else {
++			log.Info("ipFeat routing policy updated without restarting connections")
++		}
++	}
++}
++
+ func run() error {
+ 	optionsList, err := readConfig()
+ 	if err != nil {
+diff --git a/cmd/sing-box/cmd_version.go b/cmd/sing-box/cmd_version.go
+index ab5ada2..df3143a 100644
+--- a/cmd/sing-box/cmd_version.go
++++ b/cmd/sing-box/cmd_version.go
+@@ -59,6 +59,7 @@ func printVersion(cmd *cobra.Command, args []string) {
+ 	} else {
+ 		version += "CGO: disabled\n"
+ 	}
++	version += "ipFeat patch: 1.14.4-8\n"
+ 
+ 	os.Stdout.WriteString(version)
+ }
+diff --git a/common/process/ancestor_darwin.go b/common/process/ancestor_darwin.go
+new file mode 100644
+index 0000000..2094b81
+--- /dev/null
++++ b/common/process/ancestor_darwin.go
+@@ -0,0 +1,102 @@
++//go:build darwin
++
++package process
++
++import (
++	"encoding/binary"
++	"syscall"
++	"unsafe"
++
++	"golang.org/x/sys/unix"
++)
++
++// proc_bsdinfo is 136 bytes on Darwin. These offsets are defined in
++// <sys/proc_info.h>; reject a short result rather than using incomplete data.
++const darwinBSDInfoSize = 136
++
++type darwinBSDInfo struct {
++	pid, ppid uint32
++	uid       int32
++	startSec  uint64
++	startUSec uint64
++}
++
++func readDarwinBSDInfo(pid uint32) (darwinBSDInfo, bool) {
++	var buf [darwinBSDInfoSize]byte
++	n, _, errno := syscall.Syscall6(syscall.SYS_PROC_INFO, 2, uintptr(pid), 3, 0,
++		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
++	if errno != 0 || n != uintptr(len(buf)) {
++		// macOS can hide PROC_PIDTBSDINFO for the setuid login process even
++		// though kern.proc.pid still exposes its stable PID, parent and start time.
++		info, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid))
++		if err != nil || info.Proc.P_pid != int32(pid) || info.Proc.P_starttime.Sec <= 0 {
++			return darwinBSDInfo{}, false
++		}
++		return darwinBSDInfo{
++			pid: uint32(info.Proc.P_pid), ppid: uint32(info.Eproc.Ppid),
++			uid:       int32(info.Eproc.Ucred.Uid),
++			startSec:  uint64(info.Proc.P_starttime.Sec),
++			startUSec: uint64(info.Proc.P_starttime.Usec),
++		}, true
++	}
++	return darwinBSDInfo{
++		pid:       binary.NativeEndian.Uint32(buf[12:16]),
++		ppid:      binary.NativeEndian.Uint32(buf[16:20]),
++		uid:       int32(binary.NativeEndian.Uint32(buf[20:24])),
++		startSec:  binary.NativeEndian.Uint64(buf[120:128]),
++		startUSec: binary.NativeEndian.Uint64(buf[128:136]),
++	}, true
++}
++
++func sameDarwinProcess(a, b darwinBSDInfo) bool {
++	return a.pid == b.pid && a.ppid == b.ppid && a.uid == b.uid &&
++		a.startSec == b.startSec && a.startUSec == b.startUSec
++}
++
++// darwinAncestorPaths returns verified same-user ancestors. macOS terminals
++// commonly place the root-owned /usr/bin/login between the terminal and shell;
++// only that exact system binary may bridge the UID boundary.
++func darwinAncestorPaths(pid uint32, socketUID int32) []string {
++	return darwinAncestorPathsWith(pid, socketUID, readDarwinBSDInfo, getExecPathFromPID)
++}
++
++func darwinAncestorPathsWith(
++	pid uint32, socketUID int32,
++	read func(uint32) (darwinBSDInfo, bool),
++	executable func(uint32) (string, error),
++) []string {
++	child, ok := read(pid)
++	if !ok || child.pid != pid || child.uid != socketUID {
++		return nil
++	}
++	paths := make([]string, 0, 4)
++	seen := map[uint32]bool{pid: true}
++	crossedLogin := false
++	for depth := 0; depth < 16 && child.ppid > 1 && !seen[child.ppid]; depth++ {
++		parentPID := child.ppid
++		seen[parentPID] = true
++		parent, ok := read(parentPID)
++		loginBridge := parent.uid == 0 && !crossedLogin
++		if !ok || parent.pid != parentPID || (parent.uid != socketUID && !loginBridge) ||
++			parent.startSec > child.startSec ||
++			(parent.startSec == child.startSec && parent.startUSec > child.startUSec) {
++			break
++		}
++		path, err := executable(parentPID)
++		verified, stillRunning := read(parentPID)
++		if err != nil || !stillRunning || !sameDarwinProcess(parent, verified) || path == "" {
++			break
++		}
++		if loginBridge {
++			if path != "/usr/bin/login" {
++				break
++			}
++			crossedLogin = true
++			child = parent
++			continue
++		}
++		paths = append(paths, path)
++		child = parent
++	}
++	return paths
++}
+diff --git a/common/process/ancestor_darwin_test.go b/common/process/ancestor_darwin_test.go
+new file mode 100644
+index 0000000..bc48849
+--- /dev/null
++++ b/common/process/ancestor_darwin_test.go
+@@ -0,0 +1,81 @@
++//go:build darwin
++
++package process
++
++import (
++	"errors"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"testing"
++)
++
++func TestReadDarwinBSDInfoForCurrentProcess(t *testing.T) {
++	info, ok := readDarwinBSDInfo(uint32(os.Getpid()))
++	if !ok {
++		t.Fatal("could not read proc_bsdinfo")
++	}
++	if info.pid != uint32(os.Getpid()) || info.ppid != uint32(os.Getppid()) || info.uid != int32(os.Getuid()) {
++		t.Fatalf("wrong identity: %+v", info)
++	}
++	if info.startSec == 0 {
++		t.Fatal("missing process start time")
++	}
++}
++
++func TestAncestorsRejectWrongUID(t *testing.T) {
++	paths := darwinAncestorPaths(uint32(os.Getpid()), int32(os.Getuid()+1))
++	if len(paths) != 0 {
++		t.Fatalf("wrong UID inherited paths: %v", paths)
++	}
++}
++
++func TestAncestorOfSpawnedCommandIncludesCurrentProcess(t *testing.T) {
++	command := exec.Command("/bin/sleep", "2")
++	if err := command.Start(); err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
++	paths := darwinAncestorPaths(uint32(command.Process.Pid), int32(os.Getuid()))
++	current, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, path := range paths {
++		if filepath.Base(path) == filepath.Base(current) {
++			return
++		}
++	}
++	t.Fatalf("spawned command did not inherit current process: %v", paths)
++}
++
++func TestAncestorCrossesVerifiedSystemLogin(t *testing.T) {
++	processes := map[uint32]darwinBSDInfo{
++		10: {pid: 10, ppid: 20, uid: 501, startSec: 100},
++		20: {pid: 20, ppid: 30, uid: 501, startSec: 90},
++		30: {pid: 30, ppid: 40, uid: 0, startSec: 80},
++		40: {pid: 40, ppid: 50, uid: 501, startSec: 70},
++		50: {pid: 50, ppid: 1, uid: 501, startSec: 60},
++	}
++	paths := map[uint32]string{
++		20: "/bin/zsh", 30: "/usr/bin/login",
++		40: "/Users/test/Library/Application Support/iTerm2/iTermServer",
++		50: "/Applications/iTerm.app/Contents/MacOS/iTerm2",
++	}
++	read := func(pid uint32) (darwinBSDInfo, bool) { item, ok := processes[pid]; return item, ok }
++	executable := func(pid uint32) (string, error) {
++		if path, ok := paths[pid]; ok {
++			return path, nil
++		}
++		return "", errors.New("missing executable")
++	}
++	got := darwinAncestorPathsWith(10, 501, read, executable)
++	if len(got) != 3 || got[0] != paths[20] || got[1] != paths[40] || got[2] != paths[50] {
++		t.Fatalf("iTerm ancestry was lost across login: %v", got)
++	}
++	paths[30] = "/usr/bin/sudo"
++	got = darwinAncestorPathsWith(10, 501, read, executable)
++	if len(got) != 1 || got[0] != paths[20] {
++		t.Fatalf("untrusted root process crossed UID boundary: %v", got)
++	}
++}
+diff --git a/common/process/searcher_darwin_shared.go b/common/process/searcher_darwin_shared.go
+index 4cb3dde..6c635cc 100644
+--- a/common/process/searcher_darwin_shared.go
++++ b/common/process/searcher_darwin_shared.go
+@@ -86,14 +86,15 @@ func (f *darwinConnectionFinder) find(network string, source netip.AddrPort, des
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		entry, matchKind, err := matchDarwinConnectionEntry(snapshot.entries, networkName, source, destination)
++		entry, _, err := matchDarwinConnectionEntry(snapshot.entries, networkName, source, destination)
+ 		if err != nil {
+ 			if err == ErrNotFound && fromCache {
+ 				continue
+ 			}
+ 			return nil, err
+ 		}
+-		if fromCache && matchKind != darwinConnectionMatchExact {
++		if fromCache {
++			// A reused socket tuple may point to a different PID now.
+ 			continue
+ 		}
+ 		owner := &adapter.ConnectionOwner{
+@@ -103,14 +104,19 @@ func (f *darwinConnectionFinder) find(network string, source netip.AddrPort, des
+ 		if entry.pid == 0 {
+ 			return owner, nil
+ 		}
++		before, valid := readDarwinBSDInfo(entry.pid)
++		if !valid || before.pid != entry.pid || before.uid != entry.uid {
++			return owner, nil
++		}
+ 		processPath, err := getExecPathFromPID(entry.pid)
+-		if err == nil {
++		after, valid := readDarwinBSDInfo(entry.pid)
++		if err == nil && valid && sameDarwinProcess(before, after) {
++			owner.ProcessID = entry.pid
++			owner.ProcessStartUnixNano = before.startSec*1_000_000_000 + before.startUSec*1_000
+ 			owner.ProcessPath = processPath
++			owner.AncestorProcessPaths = darwinAncestorPaths(entry.pid, entry.uid)
+ 			return owner, nil
+ 		}
+-		if fromCache {
+-			continue
+-		}
+ 		return owner, nil
+ 	}
+ 	if lastOwner != nil {
+@@ -213,8 +219,10 @@ func matchDarwinConnectionEntry(entries []darwinConnectionEntry, network string,
+ 	}
+ 	var localFallback darwinConnectionEntry
+ 	var hasLocalFallback bool
++	var ambiguousLocalFallback bool
+ 	var wildcardFallback darwinConnectionEntry
+ 	var hasWildcardFallback bool
++	var ambiguousWildcardFallback bool
+ 	for _, entry := range entries {
+ 		if entry.localPort != source.Port() || sourceAddr.BitLen() != entry.localAddr.BitLen() {
+ 			continue
+@@ -228,19 +236,35 @@ func matchDarwinConnectionEntry(entries []darwinConnectionEntry, network string,
+ 		if network != N.NetworkUDP {
+ 			continue
+ 		}
+-		if !hasLocalFallback && entry.localAddr == sourceAddr {
+-			hasLocalFallback = true
+-			localFallback = entry
++		if entry.localAddr == sourceAddr {
++			if hasLocalFallback && (localFallback.pid != entry.pid || localFallback.uid != entry.uid) {
++				ambiguousLocalFallback = true
++			}
++			if !hasLocalFallback {
++				hasLocalFallback = true
++				localFallback = entry
++			}
+ 		}
+-		if !hasWildcardFallback && entry.localAddr.IsUnspecified() {
+-			hasWildcardFallback = true
+-			wildcardFallback = entry
++		if entry.localAddr.IsUnspecified() {
++			if hasWildcardFallback && (wildcardFallback.pid != entry.pid || wildcardFallback.uid != entry.uid) {
++				ambiguousWildcardFallback = true
++			}
++			if !hasWildcardFallback {
++				hasWildcardFallback = true
++				wildcardFallback = entry
++			}
+ 		}
+ 	}
+ 	if hasLocalFallback {
++		if ambiguousLocalFallback {
++			return darwinConnectionEntry{}, darwinConnectionMatchLocalFallback, ErrNotFound
++		}
+ 		return localFallback, darwinConnectionMatchLocalFallback, nil
+ 	}
+ 	if hasWildcardFallback {
++		if ambiguousWildcardFallback {
++			return darwinConnectionEntry{}, darwinConnectionMatchWildcardFallback, ErrNotFound
++		}
+ 		return wildcardFallback, darwinConnectionMatchWildcardFallback, nil
+ 	}
+ 	return darwinConnectionEntry{}, darwinConnectionMatchExact, ErrNotFound
+diff --git a/common/trafficcontrol/ipfeat_stats.go b/common/trafficcontrol/ipfeat_stats.go
+new file mode 100644
+index 0000000..1fa633b
+--- /dev/null
++++ b/common/trafficcontrol/ipfeat_stats.go
+@@ -0,0 +1,228 @@
++package trafficcontrol
++
++import (
++	"encoding/json"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"syscall"
++	"time"
++
++	"github.com/gofrs/uuid/v5"
++	"github.com/sagernet/sing-box/adapter"
++	C "github.com/sagernet/sing-box/constant"
++)
++
++// ipFeat keeps only byte counts and executable paths. The destination and
++// hostname are deliberately absent from the persistent statistics file.
++type ipFeatTrafficEntry struct {
++	Day      string   `json:"day"`
++	Route    string   `json:"route"`
++	Paths    []string `json:"paths"`
++	Upload   int64    `json:"upload"`
++	Download int64    `json:"download"`
++}
++
++type ipFeatTrafficDocument struct {
++	Version   int                  `json:"version"`
++	ID        string               `json:"id"`
++	UpdatedAt time.Time            `json:"updatedAt"`
++	Entries   []ipFeatTrafficEntry `json:"entries"`
++}
++
++type ipFeatStats struct {
++	path   string
++	id     string
++	totals map[string]*ipFeatTrafficEntry // protected by Manager.closedConnectionsAccess
++	last   map[uuid.UUID]ipFeatTrafficEntry
++	stop   chan struct{}
++	done   chan struct{}
++}
++
++func ipFeatEntry(metadata *TrackerMetadata) (ipFeatTrafficEntry, bool) {
++	if metadata == nil || metadata.OutboundType == C.TypeDNS || !metadata.Metadata.Destination.Addr.Is4() {
++		return ipFeatTrafficEntry{}, false
++	}
++	entry := ipFeatTrafficEntry{Route: metadata.Outbound}
++	if entry.Route == "" {
++		entry.Route = "unknown"
++	}
++	if owner := metadata.Metadata.ProcessInfo; owner != nil {
++		seen := make(map[string]bool)
++		for _, path := range append([]string{owner.ProcessPath}, owner.AncestorProcessPaths...) {
++			if path != "" && !seen[path] {
++				entry.Paths = append(entry.Paths, path)
++				seen[path] = true
++			}
++		}
++	}
++	entry.Upload = metadata.Upload.Load()
++	entry.Download = metadata.Download.Load()
++	return entry, true
++}
++
++func ipFeatEntryKey(entry ipFeatTrafficEntry) string {
++	return entry.Day + "\x00" + entry.Route + "\x00" + strings.Join(entry.Paths, "\x00")
++}
++
++func (s *ipFeatStats) add(entry ipFeatTrafficEntry) {
++	key := ipFeatEntryKey(entry)
++	if existing := s.totals[key]; existing != nil {
++		existing.Upload += entry.Upload
++		existing.Download += entry.Download
++	} else {
++		copy := entry
++		s.totals[key] = &copy
++	}
++}
++
++// Called while Manager.closedConnectionsAccess is held. A flow keeps its
++// original outbound even if the live routing policy changes later.
++func (s *ipFeatStats) record(metadata *TrackerMetadata, now time.Time) {
++	entry, ok := ipFeatEntry(metadata)
++	if !ok {
++		return
++	}
++	previous := s.last[metadata.ID]
++	entry.Upload -= previous.Upload
++	entry.Download -= previous.Download
++	if entry.Upload < 0 || entry.Download < 0 {
++		return
++	}
++	if entry.Upload != 0 || entry.Download != 0 {
++		entry.Day = now.Local().Format("2006-01-02")
++		s.add(entry)
++	}
++	s.last[metadata.ID] = ipFeatTrafficEntry{Upload: metadata.Upload.Load(), Download: metadata.Download.Load()}
++}
++
++func loadIPFeatStats(path string) (*ipFeatStats, error) {
++	s := &ipFeatStats{path: path, totals: make(map[string]*ipFeatTrafficEntry),
++		last: make(map[uuid.UUID]ipFeatTrafficEntry),
++		stop: make(chan struct{}), done: make(chan struct{})}
++	data, err := os.ReadFile(path)
++	if errors.Is(err, os.ErrNotExist) {
++		id, idErr := uuid.NewV4()
++		if idErr != nil {
++			return nil, idErr
++		}
++		s.id = id.String()
++		return s, nil
++	}
++	if err != nil {
++		return nil, err
++	}
++	if len(data) > 16<<20 {
++		return nil, fmt.Errorf("ipFeat traffic file exceeds 16 MiB")
++	}
++	var doc ipFeatTrafficDocument
++	if err = json.Unmarshal(data, &doc); err != nil {
++		return nil, err
++	}
++	if doc.Version != 1 || doc.ID == "" || len(doc.Entries) > 100000 {
++		return nil, fmt.Errorf("unsupported ipFeat traffic document")
++	}
++	s.id = doc.ID
++	for _, entry := range doc.Entries {
++		if entry.Day == "" || entry.Route == "" || entry.Upload < 0 || entry.Download < 0 {
++			return nil, fmt.Errorf("invalid ipFeat traffic entry")
++		}
++		s.add(entry)
++	}
++	return s, nil
++}
++
++func (m *Manager) startIPFeatStats(scope *adapter.Scope) error {
++	path := os.Getenv("IPFEAT_TRAFFIC_PATH")
++	if path == "" {
++		return nil
++	}
++	s, err := loadIPFeatStats(path)
++	if err != nil {
++		fmt.Fprintln(os.Stderr, "ipFeat traffic statistics disabled:", err)
++		return nil // A damaged statistics file must never stop the network.
++	}
++	m.ipFeatStats = s
++	go func() {
++		defer close(s.done)
++		ticker := time.NewTicker(2 * time.Second)
++		defer ticker.Stop()
++		for {
++			select {
++			case <-s.stop:
++				return
++			case <-ticker.C:
++				if err := m.flushIPFeatStats(); err != nil {
++					fmt.Fprintln(os.Stderr, "ipFeat traffic statistics:", err)
++				}
++			}
++		}
++	}()
++	scope.Add(func() error {
++		close(s.stop)
++		<-s.done
++		return m.flushIPFeatStats()
++	})
++	return nil
++}
++
++func (m *Manager) flushIPFeatStats() error {
++	s := m.ipFeatStats
++	if s == nil {
++		return nil
++	}
++	m.closedConnectionsAccess.Lock()
++	now := time.Now()
++	m.connections.Range(func(_ uuid.UUID, tracker Tracker) bool {
++		s.record(tracker.Metadata(), now)
++		return true
++	})
++	ordered := make([]ipFeatTrafficEntry, 0, len(s.totals))
++	for _, entry := range s.totals {
++		ordered = append(ordered, *entry)
++	}
++	m.closedConnectionsAccess.Unlock()
++	sort.Slice(ordered, func(i, j int) bool { return ipFeatEntryKey(ordered[i]) < ipFeatEntryKey(ordered[j]) })
++	data, err := json.Marshal(ipFeatTrafficDocument{Version: 1, ID: s.id,
++		UpdatedAt: time.Now().UTC(), Entries: ordered})
++	if err != nil {
++		return err
++	}
++	dir := filepath.Dir(s.path)
++	info, err := os.Stat(dir)
++	if err != nil {
++		return err
++	}
++	temp, err := os.CreateTemp(dir, ".traffic-stats-*")
++	if err != nil {
++		return err
++	}
++	defer os.Remove(temp.Name())
++	if err = temp.Chmod(0600); err != nil {
++		temp.Close()
++		return err
++	}
++	if os.Geteuid() == 0 {
++		if owner, ok := info.Sys().(*syscall.Stat_t); ok {
++			if err = temp.Chown(int(owner.Uid), int(owner.Gid)); err != nil {
++				temp.Close()
++				return err
++			}
++		}
++	}
++	if _, err = temp.Write(data); err != nil {
++		temp.Close()
++		return err
++	}
++	if err = temp.Sync(); err != nil {
++		temp.Close()
++		return err
++	}
++	if err = temp.Close(); err != nil {
++		return err
++	}
++	return os.Rename(temp.Name(), s.path)
++}
+diff --git a/common/trafficcontrol/ipfeat_stats_test.go b/common/trafficcontrol/ipfeat_stats_test.go
+new file mode 100644
+index 0000000..babde50
+--- /dev/null
++++ b/common/trafficcontrol/ipfeat_stats_test.go
+@@ -0,0 +1,77 @@
++package trafficcontrol
++
++import (
++	"encoding/json"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/gofrs/uuid/v5"
++	"github.com/sagernet/sing-box/adapter"
++	M "github.com/sagernet/sing/common/metadata"
++)
++
++func TestIPFeatStatsPersistAcrossRestart(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "traffic-stats.json")
++	stats, err := loadIPFeatStats(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	stats.add(ipFeatTrafficEntry{Day: "2026-11-24", Route: "proxy", Paths: []string{"/usr/bin/curl", "/Applications/iTerm.app/Contents/MacOS/iTerm2"}, Upload: 10, Download: 20})
++	manager := &Manager{ipFeatStats: stats}
++	if err := manager.flushIPFeatStats(); err != nil {
++		t.Fatal(err)
++	}
++	loaded, err := loadIPFeatStats(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if loaded.id != stats.id {
++		t.Fatal("statistics identity changed across restart")
++	}
++	entry := loaded.totals[ipFeatEntryKey(ipFeatTrafficEntry{Day: "2026-11-24", Route: "proxy", Paths: []string{"/usr/bin/curl", "/Applications/iTerm.app/Contents/MacOS/iTerm2"}})]
++	if entry == nil || entry.Upload != 10 || entry.Download != 20 {
++		t.Fatalf("wrong restored counter: %+v", entry)
++	}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var doc ipFeatTrafficDocument
++	if err := json.Unmarshal(data, &doc); err != nil {
++		t.Fatal(err)
++	}
++	if len(doc.Entries) != 1 {
++		t.Fatalf("expected one route and process aggregate, got %d", len(doc.Entries))
++	}
++}
++
++func TestIPFeatStatsCheckpointsAndSplitsDays(t *testing.T) {
++	id, _ := uuid.NewV4()
++	upload, download := new(atomic.Int64), new(atomic.Int64)
++	metadata := &TrackerMetadata{
++		ID: id, Upload: upload, Download: download, Outbound: "proxy",
++		Metadata: adapter.InboundContext{
++			Destination: M.Socksaddr{Addr: netip.MustParseAddr("203.0.113.10")},
++			ProcessInfo: &adapter.ConnectionOwner{ProcessPath: "/usr/bin/curl",
++				AncestorProcessPaths: []string{"/Applications/iTerm.app/Contents/MacOS/iTerm2"}},
++		},
++	}
++	stats := &ipFeatStats{totals: make(map[string]*ipFeatTrafficEntry), last: make(map[uuid.UUID]ipFeatTrafficEntry)}
++	upload.Store(12)
++	stats.record(metadata, time.Date(2026, 11, 24, 12, 0, 0, 0, time.Local))
++	stats.record(metadata, time.Date(2026, 11, 24, 12, 0, 1, 0, time.Local))
++	upload.Store(20)
++	download.Store(5)
++	stats.record(metadata, time.Date(2026, 11, 25, 12, 0, 0, 0, time.Local))
++	first := stats.totals[ipFeatEntryKey(ipFeatTrafficEntry{Day: "2026-11-24", Route: "proxy",
++		Paths: []string{"/usr/bin/curl", "/Applications/iTerm.app/Contents/MacOS/iTerm2"}})]
++	second := stats.totals[ipFeatEntryKey(ipFeatTrafficEntry{Day: "2026-11-25", Route: "proxy",
++		Paths: []string{"/usr/bin/curl", "/Applications/iTerm.app/Contents/MacOS/iTerm2"}})]
++	if first == nil || first.Upload != 12 || second == nil || second.Upload != 8 || second.Download != 5 {
++		t.Fatalf("wrong daily checkpoints: first=%+v second=%+v", first, second)
++	}
++}
+diff --git a/common/trafficcontrol/manager.go b/common/trafficcontrol/manager.go
+index 5e938cf..b2017e1 100644
+--- a/common/trafficcontrol/manager.go
++++ b/common/trafficcontrol/manager.go
+@@ -43,6 +43,7 @@ type Manager struct {
+ 
+ 	eventSubscriber *observable.Subscriber[ConnectionEvent]
+ 	eventObserver   *observable.Observer[ConnectionEvent]
++	ipFeatStats     *ipFeatStats
+ }
+ 
+ func NewManager() *Manager {
+@@ -57,6 +58,9 @@ func (m *Manager) Name() string {
+ 
+ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+ 	if stage == adapter.StartStateInitialize {
++		if err := m.startIPFeatStats(scope); err != nil {
++			return err
++		}
+ 		m.eventObserver = observable.NewObserver(m.eventSubscriber, 64)
+ 		scope.Add(m.eventObserver.Close)
+ 		cleaner := cleanup.Add(m.Clear)
+@@ -97,6 +101,10 @@ func (m *Manager) leave(tracker Tracker) {
+ 	}
+ 	metadata.ClosedAt = closedAt
+ 	metadataCopy := *metadata
++	if m.ipFeatStats != nil {
++		m.ipFeatStats.record(&metadataCopy, closedAt)
++		delete(m.ipFeatStats.last, metadata.ID)
++	}
+ 	if m.closedConnections.Len() >= closedConnectionsLimit {
+ 		evicted := m.closedConnections.PopFront()
+ 		m.closedUploadTotal += evicted.Upload.Load()
+diff --git a/option/rule.go b/option/rule.go
+index 15f86a4..e2633e4 100644
+--- a/option/rule.go
++++ b/option/rule.go
+@@ -162,6 +162,7 @@ type RawDefaultRule struct {
+ 	ProcessName              badoption.Listable[string]                                                  `json:"process_name,omitempty"`
+ 	ProcessPath              badoption.Listable[string]                                                  `json:"process_path,omitempty"`
+ 	ProcessPathRegex         badoption.Listable[string]                                                  `json:"process_path_regex,omitempty"`
++	AncestorProcessPathRegex badoption.Listable[string]                                                  `json:"ancestor_process_path_regex,omitempty"`
+ 	PackageName              badoption.Listable[string]                                                  `json:"package_name,omitempty"`
+ 	PackageNameRegex         badoption.Listable[string]                                                  `json:"package_name_regex,omitempty"`
+ 	User                     badoption.Listable[string]                                                  `json:"user,omitempty"`
+diff --git a/option/rule_set.go b/option/rule_set.go
+index a14274b..1ab2ae2 100644
+--- a/option/rule_set.go
++++ b/option/rule_set.go
+@@ -249,30 +249,31 @@ func (r HeadlessRule) DescribeSchema(builder schema.Builder) (*schema.Node, erro
+ }
+ 
+ type DefaultHeadlessRule struct {
+-	QueryType               badoption.Listable[DNSQueryType]                                            `json:"query_type,omitempty"`
+-	Network                 badoption.Listable[string]                                                  `json:"network,omitempty" enum:"tcp,udp,icmp"`
+-	Domain                  badoption.Listable[string]                                                  `json:"domain,omitempty"`
+-	DomainSuffix            badoption.Listable[string]                                                  `json:"domain_suffix,omitempty"`
+-	DomainKeyword           badoption.Listable[string]                                                  `json:"domain_keyword,omitempty"`
+-	DomainRegex             badoption.Listable[string]                                                  `json:"domain_regex,omitempty"`
+-	SourceIPCIDR            badoption.Listable[string]                                                  `json:"source_ip_cidr,omitempty"`
+-	IPCIDR                  badoption.Listable[string]                                                  `json:"ip_cidr,omitempty"`
+-	SourcePort              badoption.Listable[uint16]                                                  `json:"source_port,omitempty"`
+-	SourcePortRange         badoption.Listable[string]                                                  `json:"source_port_range,omitempty"`
+-	Port                    badoption.Listable[uint16]                                                  `json:"port,omitempty"`
+-	PortRange               badoption.Listable[string]                                                  `json:"port_range,omitempty"`
+-	ProcessName             badoption.Listable[string]                                                  `json:"process_name,omitempty"`
+-	ProcessPath             badoption.Listable[string]                                                  `json:"process_path,omitempty"`
+-	ProcessPathRegex        badoption.Listable[string]                                                  `json:"process_path_regex,omitempty"`
+-	PackageName             badoption.Listable[string]                                                  `json:"package_name,omitempty"`
+-	PackageNameRegex        badoption.Listable[string]                                                  `json:"package_name_regex,omitempty"`
+-	NetworkType             badoption.Listable[InterfaceType]                                           `json:"network_type,omitempty"`
+-	NetworkIsExpensive      bool                                                                        `json:"network_is_expensive,omitempty"`
+-	NetworkIsConstrained    bool                                                                        `json:"network_is_constrained,omitempty"`
+-	WIFISSID                badoption.Listable[string]                                                  `json:"wifi_ssid,omitempty"`
+-	WIFIBSSID               badoption.Listable[string]                                                  `json:"wifi_bssid,omitempty"`
+-	NetworkInterfaceAddress *badjson.TypedMap[InterfaceType, badoption.Listable[*badoption.Prefixable]] `json:"network_interface_address,omitempty"`
+-	DefaultInterfaceAddress badoption.Listable[*badoption.Prefixable]                                   `json:"default_interface_address,omitempty"`
++	QueryType                badoption.Listable[DNSQueryType]                                            `json:"query_type,omitempty"`
++	Network                  badoption.Listable[string]                                                  `json:"network,omitempty" enum:"tcp,udp,icmp"`
++	Domain                   badoption.Listable[string]                                                  `json:"domain,omitempty"`
++	DomainSuffix             badoption.Listable[string]                                                  `json:"domain_suffix,omitempty"`
++	DomainKeyword            badoption.Listable[string]                                                  `json:"domain_keyword,omitempty"`
++	DomainRegex              badoption.Listable[string]                                                  `json:"domain_regex,omitempty"`
++	SourceIPCIDR             badoption.Listable[string]                                                  `json:"source_ip_cidr,omitempty"`
++	IPCIDR                   badoption.Listable[string]                                                  `json:"ip_cidr,omitempty"`
++	SourcePort               badoption.Listable[uint16]                                                  `json:"source_port,omitempty"`
++	SourcePortRange          badoption.Listable[string]                                                  `json:"source_port_range,omitempty"`
++	Port                     badoption.Listable[uint16]                                                  `json:"port,omitempty"`
++	PortRange                badoption.Listable[string]                                                  `json:"port_range,omitempty"`
++	ProcessName              badoption.Listable[string]                                                  `json:"process_name,omitempty"`
++	ProcessPath              badoption.Listable[string]                                                  `json:"process_path,omitempty"`
++	ProcessPathRegex         badoption.Listable[string]                                                  `json:"process_path_regex,omitempty"`
++	AncestorProcessPathRegex badoption.Listable[string]                                                  `json:"ancestor_process_path_regex,omitempty"`
++	PackageName              badoption.Listable[string]                                                  `json:"package_name,omitempty"`
++	PackageNameRegex         badoption.Listable[string]                                                  `json:"package_name_regex,omitempty"`
++	NetworkType              badoption.Listable[InterfaceType]                                           `json:"network_type,omitempty"`
++	NetworkIsExpensive       bool                                                                        `json:"network_is_expensive,omitempty"`
++	NetworkIsConstrained     bool                                                                        `json:"network_is_constrained,omitempty"`
++	WIFISSID                 badoption.Listable[string]                                                  `json:"wifi_ssid,omitempty"`
++	WIFIBSSID                badoption.Listable[string]                                                  `json:"wifi_bssid,omitempty"`
++	NetworkInterfaceAddress  *badjson.TypedMap[InterfaceType, badoption.Listable[*badoption.Prefixable]] `json:"network_interface_address,omitempty"`
++	DefaultInterfaceAddress  badoption.Listable[*badoption.Prefixable]                                   `json:"default_interface_address,omitempty"`
+ 
+ 	Invert bool `json:"invert,omitempty"`
+ 
+diff --git a/route/ipfeat_live.go b/route/ipfeat_live.go
+new file mode 100644
+index 0000000..354f0ce
+--- /dev/null
++++ b/route/ipfeat_live.go
+@@ -0,0 +1,169 @@
++package route
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++
++	"github.com/sagernet/sing-box/adapter"
++	"github.com/sagernet/sing-box/option"
++	R "github.com/sagernet/sing-box/route/rule"
++	"github.com/sagernet/sing/common/json"
++)
++
++type ipFeatLiveDocument struct {
++	Rules                      []option.Rule              `json:"rules"`
++	Prompts                    []ipFeatPromptDocument `json:"prompts,omitempty"`
++	SocketPath                 string                     `json:"socket_path,omitempty"`
++	AskUnknownProcesses        bool                       `json:"ask_unknown_processes,omitempty"`
++	KnownProcessPaths          []string                   `json:"known_process_paths,omitempty"`
++	KnownProcessPathRegex      []string                   `json:"known_process_path_regex,omitempty"`
++	PromptBypassDomains        []string                   `json:"prompt_bypass_domains,omitempty"`
++	PromptBypassDomainSuffixes []string                   `json:"prompt_bypass_domain_suffixes,omitempty"`
++}
++
++type ipFeatPromptDocument struct {
++	ApplicationID       string   `json:"application_id"`
++	ApplicationName     string   `json:"application_name"`
++	ProcessPathRegex    []string `json:"process_path_regex"`
++	ExcludeProcessPaths []string `json:"exclude_process_paths,omitempty"`
++}
++
++type ipFeatLivePolicy struct {
++	rules                      []adapter.Rule
++	prompts                    []ipFeatPrompt
++	socketPath                 string
++	askUnknownProcesses        bool
++	knownPaths                 map[string]bool
++	knownPatterns              []*regexp.Regexp
++	promptBypassDomains        map[string]bool
++	promptBypassDomainSuffixes []string
++}
++
++type ipFeatPrompt struct {
++	id, name string
++	patterns []*regexp.Regexp
++	excluded map[string]bool
++	unknown  bool
++}
++
++// ApplyipFeatRules atomically replaces only the routing decision table.
++// Existing TCP/UDP flows keep their selected outbound and the TUN stays up.
++func (r *Router) ApplyipFeatRules(data []byte) error {
++	if len(data) > 2<<20 {
++		return fmt.Errorf("ipFeat rule document exceeds 2 MiB")
++	}
++	doc, err := json.UnmarshalExtendedContext[ipFeatLiveDocument](r.ctx, data)
++	if err != nil {
++		return err
++	}
++	if len(doc.Rules) > 4096 {
++		return fmt.Errorf("ipFeat rule document has too many rules")
++	}
++	compiled := make([]adapter.Rule, 0, len(doc.Rules)+len(r.rules))
++	for index, options := range doc.Rules {
++		if options.Type != "default" && options.Type != "logical" {
++			return fmt.Errorf("unsupported ipFeat rule %d type", index)
++		}
++		// The live document contains only self-contained rules. Rule-set
++		// subscriptions and lifecycle changes belong to the base config.
++		if options.Type == "default" && len(options.DefaultOptions.RuleSet) != 0 {
++			return fmt.Errorf("rule-set references require a full reload")
++		}
++		item, buildErr := R.NewRule(r.ctx, r.logger, options, false)
++		if buildErr != nil {
++			return fmt.Errorf("ipFeat rule %d: %w", index, buildErr)
++		}
++		if action, ok := item.Action().(*R.RuleActionRoute); ok {
++			if _, loaded := r.outbound.Outbound(action.Outbound); !loaded {
++				return fmt.Errorf("ipFeat rule %d references missing outbound %q", index, action.Outbound)
++			}
++		}
++		if startErr := item.Start(); startErr != nil {
++			return fmt.Errorf("ipFeat rule %d: %w", index, startErr)
++		}
++		compiled = append(compiled, item)
++	}
++	compiled = append(compiled, r.rules...)
++	prompts := make([]ipFeatPrompt, 0, len(doc.Prompts))
++	if len(doc.Prompts) > 256 {
++		return fmt.Errorf("too many ipFeat prompt rules")
++	}
++	for _, prompt := range doc.Prompts {
++		if prompt.ApplicationID == "" || prompt.ApplicationName == "" || len(prompt.ProcessPathRegex) == 0 {
++			return fmt.Errorf("invalid ipFeat prompt")
++		}
++		entry := ipFeatPrompt{id: prompt.ApplicationID, name: prompt.ApplicationName,
++			patterns: make([]*regexp.Regexp, 0, len(prompt.ProcessPathRegex)), excluded: make(map[string]bool)}
++		for _, pattern := range prompt.ProcessPathRegex {
++			matcher, parseErr := regexp.Compile(pattern)
++			if parseErr != nil {
++				return fmt.Errorf("invalid ipFeat prompt pattern: %w", parseErr)
++			}
++			entry.patterns = append(entry.patterns, matcher)
++		}
++		for _, path := range prompt.ExcludeProcessPaths {
++			entry.excluded[path] = true
++		}
++		prompts = append(prompts, entry)
++	}
++	if len(doc.KnownProcessPaths) > 4096 || len(doc.KnownProcessPathRegex) > 4096 {
++		return fmt.Errorf("too many known process paths")
++	}
++	if len(doc.PromptBypassDomains)+len(doc.PromptBypassDomainSuffixes) > 4096 {
++		return fmt.Errorf("too many prompt bypass domains")
++	}
++	bypassDomains := make(map[string]bool, len(doc.PromptBypassDomains))
++	for _, domain := range doc.PromptBypassDomains {
++		if domain == "" || strings.HasPrefix(domain, ".") {
++			return fmt.Errorf("invalid prompt bypass domain")
++		}
++		bypassDomains[strings.ToLower(domain)] = true
++	}
++	bypassSuffixes := make([]string, 0, len(doc.PromptBypassDomainSuffixes))
++	for _, suffix := range doc.PromptBypassDomainSuffixes {
++		if len(suffix) < 2 || !strings.HasPrefix(suffix, ".") {
++			return fmt.Errorf("invalid prompt bypass domain suffix")
++		}
++		bypassSuffixes = append(bypassSuffixes, strings.ToLower(suffix))
++	}
++	knownPaths := make(map[string]bool, len(doc.KnownProcessPaths))
++	for _, path := range doc.KnownProcessPaths {
++		if path == "" {
++			return fmt.Errorf("empty known process path")
++		}
++		knownPaths[path] = true
++	}
++	knownPatterns := make([]*regexp.Regexp, 0, len(doc.KnownProcessPathRegex))
++	for _, pattern := range doc.KnownProcessPathRegex {
++		compiledPattern, err := regexp.Compile(pattern)
++		if err != nil {
++			return fmt.Errorf("invalid known process pattern: %w", err)
++		}
++		knownPatterns = append(knownPatterns, compiledPattern)
++	}
++	previousPolicy := r.livePolicy.Load()
++	r.livePolicy.Store(&ipFeatLivePolicy{
++		rules: compiled, prompts: prompts, socketPath: doc.SocketPath,
++		askUnknownProcesses: doc.AskUnknownProcesses,
++		knownPaths:          knownPaths, knownPatterns: knownPatterns,
++		promptBypassDomains: bypassDomains, promptBypassDomainSuffixes: bypassSuffixes,
++	})
++	r.promptAccess.Lock()
++	for key := range r.promptChoices {
++		if !strings.HasPrefix(key, "unknown\x00") {
++			delete(r.promptChoices, key)
++			continue
++		}
++		if previousPolicy != nil {
++			for path := range previousPolicy.knownPaths {
++				if !knownPaths[path] && strings.HasSuffix(key, "\x00"+path) {
++					delete(r.promptChoices, key)
++					break
++				}
++			}
++		}
++	}
++	r.promptAccess.Unlock()
++	return nil
++}
+diff --git a/route/ipfeat_prompt.go b/route/ipfeat_prompt.go
+new file mode 100644
+index 0000000..c8f1ec9
+--- /dev/null
++++ b/route/ipfeat_prompt.go
+@@ -0,0 +1,267 @@
++package route
++
++import (
++	"context"
++	"encoding/json"
++	"net"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"syscall"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	C "github.com/sagernet/sing-box/constant"
++	R "github.com/sagernet/sing-box/route/rule"
++	"golang.org/x/sys/unix"
++)
++
++type ipFeatPromptChoice struct {
++	ready     chan struct{}
++	route     string
++	createdAt time.Time
++}
++
++func ipFeatBlockedRule() adapter.Rule {
++	return ipFeatDecisionRule{action: &R.RuleActionReject{Method: C.RuleActionRejectMethodDefault, NoDrop: true}}
++}
++
++type ipFeatPromptRequest struct {
++	ID              string `json:"id"`
++	Kind            string `json:"kind,omitempty"`
++	ApplicationID   string `json:"application_id"`
++	ApplicationName string `json:"application_name"`
++	CommandPath     string `json:"command_path"`
++	ParentPath      string `json:"parent_path,omitempty"`
++}
++
++type ipFeatPromptReply struct {
++	ID         string `json:"id"`
++	Route      string `json:"route"`
++	UseDefault bool   `json:"use_default,omitempty"`
++}
++
++// A prompt is only eligible for a positively identified process's public IPv4
++// connection. Private traffic, DNS, and ambiguous ownership use the ordinary
++// policy without pausing the flow.
++func (r *Router) ipFeatPromptFor(metadata *adapter.InboundContext) *ipFeatPrompt {
++	policy := r.livePolicy.Load()
++	if policy == nil || policy.socketPath == "" || metadata.ProcessInfo == nil ||
++		metadata.ProcessInfo.ProcessPath == "" ||
++		metadata.IPVersion != 4 || metadata.Destination.Port == 53 {
++		return nil
++	}
++	domain := strings.TrimSuffix(strings.ToLower(metadata.Domain), ".")
++	if domain == "" {
++		domain = strings.TrimSuffix(strings.ToLower(metadata.Destination.Fqdn), ".")
++	}
++	if policy.promptBypassDomains[domain] {
++		return nil
++	}
++	for _, suffix := range policy.promptBypassDomainSuffixes {
++		if strings.HasSuffix(domain, suffix) && len(domain) > len(suffix) {
++			return nil
++		}
++	}
++	addr := metadata.Destination.Addr
++	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() ||
++		addr.IsLoopback() || addr.IsLinkLocalUnicast() {
++		return nil
++	}
++	for i := range policy.prompts {
++		prompt := &policy.prompts[i]
++		if prompt.excluded[metadata.ProcessInfo.ProcessPath] {
++			continue
++		}
++		self := false
++		ancestor := false
++		for _, pattern := range prompt.patterns {
++			self = self || pattern.MatchString(metadata.ProcessInfo.ProcessPath)
++			for _, path := range metadata.ProcessInfo.AncestorProcessPaths {
++				ancestor = ancestor || pattern.MatchString(path)
++			}
++		}
++		if ancestor && !self {
++			return prompt
++		}
++	}
++	owner := metadata.ProcessInfo
++	if !policy.askUnknownProcesses || owner.ProcessID == 0 ||
++		owner.ProcessID == uint32(os.Getpid()) || owner.ProcessStartUnixNano == 0 ||
++		policy.knownPaths[owner.ProcessPath] {
++		return nil
++	}
++	for _, pattern := range policy.knownPatterns {
++		if pattern.MatchString(owner.ProcessPath) {
++			return nil
++		}
++		for _, ancestor := range owner.AncestorProcessPaths {
++			if pattern.MatchString(ancestor) {
++				return nil
++			}
++		}
++	}
++	return &ipFeatPrompt{name: filepath.Base(owner.ProcessPath), unknown: true}
++}
++
++func (r *Router) ipFeatPromptRule(ctx context.Context, metadata *adapter.InboundContext) adapter.Rule {
++	prompt := r.ipFeatPromptFor(metadata)
++	if prompt == nil {
++		return nil
++	}
++	policy := r.livePolicy.Load()
++	if policy == nil {
++		return nil
++	}
++	key := ipFeatPromptKey(prompt, metadata.ProcessInfo)
++	kind := "child"
++	if prompt.unknown {
++		kind = "unknown"
++	}
++	r.promptAccess.Lock()
++	if r.promptChoices == nil {
++		r.promptChoices = make(map[string]*ipFeatPromptChoice)
++	}
++	choice := r.promptChoices[key]
++	first := choice == nil
++	if first {
++		if len(r.promptChoices) >= 1024 {
++			var oldestKey string
++			var oldestTime time.Time
++			for candidateKey, candidate := range r.promptChoices {
++				if !strings.HasPrefix(candidateKey, "unknown\x00") {
++					continue
++				}
++				select {
++				case <-candidate.ready:
++					if oldestKey == "" || candidate.createdAt.Before(oldestTime) {
++						oldestKey, oldestTime = candidateKey, candidate.createdAt
++					}
++				default:
++				}
++			}
++			if oldestKey != "" {
++				delete(r.promptChoices, oldestKey)
++			}
++		}
++		if r.promptPending >= 16 || len(r.promptChoices) >= 1024 {
++			r.promptAccess.Unlock()
++			return ipFeatBlockedRule()
++		}
++		choice = &ipFeatPromptChoice{ready: make(chan struct{}), createdAt: time.Now()}
++		r.promptChoices[key] = choice
++		r.promptPending++
++	}
++	r.promptAccess.Unlock()
++	if first {
++		parentPath := ""
++		if len(metadata.ProcessInfo.AncestorProcessPaths) != 0 {
++			parentPath = metadata.ProcessInfo.AncestorProcessPaths[0]
++		}
++		request := ipFeatPromptRequest{
++			ID: key, Kind: kind,
++			ApplicationID: prompt.id, ApplicationName: prompt.name,
++			CommandPath: metadata.ProcessInfo.ProcessPath, ParentPath: parentPath,
++		}
++		// Keep the request alive after this connection times out. A late
++		// selection applies to subsequent flows from the same process.
++		go func() {
++			route := r.askipFeat(policy.socketPath, request)
++			r.promptAccess.Lock()
++			choice.route = route
++			close(choice.ready)
++			r.promptPending--
++			r.promptAccess.Unlock()
++		}()
++	}
++	select {
++	case <-choice.ready:
++	case <-time.After(20 * time.Second):
++		return ipFeatBlockedRule()
++	case <-ctx.Done():
++		return ipFeatBlockedRule()
++	}
++	r.promptAccess.Lock()
++	route := choice.route
++	r.promptAccess.Unlock()
++	if route == "" || route == "reject" {
++		return ipFeatBlockedRule()
++	}
++	if route == "\x00policy" {
++		return nil
++	}
++	if _, exists := r.outbound.Outbound(route); !exists {
++		return ipFeatBlockedRule()
++	}
++	return ipFeatDecisionRule{action: &R.RuleActionRoute{Outbound: route}}
++}
++
++func ipFeatPromptKey(prompt *ipFeatPrompt, owner *adapter.ConnectionOwner) string {
++	if !prompt.unknown {
++		return prompt.id + "\x00" + owner.ProcessPath
++	}
++	return "unknown\x00" + strconv.FormatInt(int64(owner.UserId), 10) + "\x00" +
++		strconv.FormatUint(uint64(owner.ProcessID), 10) + "\x00" +
++		strconv.FormatUint(owner.ProcessStartUnixNano, 10) + "\x00" + owner.ProcessPath
++}
++
++func (r *Router) askipFeat(socketPath string, request ipFeatPromptRequest) string {
++	info, err := os.Stat(socketPath)
++	if err != nil || info.Mode()&os.ModeSocket == 0 {
++		return ""
++	}
++	owner, ok := info.Sys().(*syscall.Stat_t)
++	if !ok || owner.Uid == 0 {
++		return ""
++	}
++	conn, err := (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext(context.Background(), "unix", socketPath)
++	if err != nil {
++		return ""
++	}
++	defer conn.Close()
++	raw, err := conn.(*net.UnixConn).SyscallConn()
++	if err != nil {
++		return ""
++	}
++	var peerUID uint32
++	var credentialErr error
++	if err = raw.Control(func(fd uintptr) {
++		var credential *unix.Xucred
++		credential, credentialErr = unix.GetsockoptXucred(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERCRED)
++		if credentialErr == nil {
++			peerUID = credential.Uid
++		}
++	}); err != nil || credentialErr != nil || peerUID != owner.Uid {
++		return ""
++	}
++	if err = json.NewEncoder(conn).Encode(request); err != nil {
++		return ""
++	}
++	var reply ipFeatPromptReply
++	if err = json.NewDecoder(conn).Decode(&reply); err != nil || reply.ID != request.ID {
++		return ""
++	}
++	if reply.Route == "reject" {
++		return "reject"
++	}
++	if reply.UseDefault {
++		return "\x00policy"
++	}
++	if strings.ContainsAny(reply.Route, "\x00\r\n") {
++		return ""
++	}
++	if _, exists := r.outbound.Outbound(reply.Route); !exists {
++		return ""
++	}
++	return reply.Route
++}
++
++type ipFeatDecisionRule struct{ action adapter.RuleAction }
++
++func (ipFeatDecisionRule) Match(*adapter.InboundContext) bool { return true }
++func (ipFeatDecisionRule) String() string                     { return "ipFeat child command choice" }
++func (ipFeatDecisionRule) Type() string                       { return C.RuleTypeDefault }
++func (r ipFeatDecisionRule) Action() adapter.RuleAction       { return r.action }
++func (ipFeatDecisionRule) Start() error                       { return nil }
++func (ipFeatDecisionRule) Close() error                       { return nil }
+diff --git a/route/ipfeat_prompt_test.go b/route/ipfeat_prompt_test.go
+new file mode 100644
+index 0000000..35ccc80
+--- /dev/null
++++ b/route/ipfeat_prompt_test.go
+@@ -0,0 +1,220 @@
++package route
++
++import (
++	"encoding/json"
++	"net"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"regexp"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/adapter"
++	M "github.com/sagernet/sing/common/metadata"
++)
++
++func TestIPFeatReplyCanArriveAfterInitialConnectionWait(t *testing.T) {
++	if os.Getuid() == 0 {
++		t.Skip("the prompt socket requires a non-root owner")
++	}
++	dir, err := os.MkdirTemp("/tmp", "ipi-prompt-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer os.RemoveAll(dir)
++	path := filepath.Join(dir, "prompt.sock")
++	listener, err := net.Listen("unix", path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer listener.Close()
++	serverDone := make(chan error, 1)
++	go func() {
++		conn, err := listener.Accept()
++		if err != nil {
++			serverDone <- err
++			return
++		}
++		defer conn.Close()
++		var request ipFeatPromptRequest
++		if err := json.NewDecoder(conn).Decode(&request); err != nil {
++			serverDone <- err
++			return
++		}
++		time.Sleep(50 * time.Millisecond)
++		serverDone <- json.NewEncoder(conn).Encode(ipFeatPromptReply{ID: request.ID, UseDefault: true})
++	}()
++	got := (&Router{}).askipFeat(path, ipFeatPromptRequest{ID: "late"})
++	if err := <-serverDone; err != nil {
++		t.Fatal(err)
++	}
++	if got != "\x00policy" {
++		t.Fatalf("late explicit policy reply = %q, want policy", got)
++	}
++}
++
++func TestIPFeatPromptRecognizesItermChild(t *testing.T) {
++	router := &Router{}
++	router.livePolicy.Store(&ipFeatLivePolicy{
++		socketPath: "/tmp/ipfeat-test.sock",
++		prompts: []ipFeatPrompt{{
++			id: "iterm", name: "iTerm2",
++			patterns: []*regexp.Regexp{regexp.MustCompile(`^/Applications/iTerm\.app/.+$`)},
++			excluded: map[string]bool{},
++		}},
++	})
++	metadata := adapter.InboundContext{
++		IPVersion:   4,
++		Destination: M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 443},
++		ProcessInfo: &adapter.ConnectionOwner{
++			ProcessPath:          "/usr/bin/curl",
++			AncestorProcessPaths: []string{"/bin/zsh", "/Applications/iTerm.app/Contents/MacOS/iTerm2"},
++		},
++	}
++	if router.ipFeatPromptFor(&metadata) == nil {
++		t.Fatal("public IPv4 connection from iTerm child did not prompt")
++	}
++	metadata.Destination.Addr = netip.MustParseAddr("192.168.11.185")
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("local IPv4 connection must not wait for a prompt")
++	}
++}
++
++func TestIPFeatDomainRuleSkipsChildAndUnknownPrompts(t *testing.T) {
++	router := &Router{}
++	router.livePolicy.Store(&ipFeatLivePolicy{
++		socketPath: "/tmp/ipfeat-test.sock", askUnknownProcesses: true,
++		promptBypassDomains:        map[string]bool{"example.org": true},
++		promptBypassDomainSuffixes: []string{".com", ".blabla.eu"},
++		prompts: []ipFeatPrompt{{
++			id: "iterm", name: "iTerm2",
++			patterns: []*regexp.Regexp{regexp.MustCompile(`^/Applications/iTerm\.app/.+$`)},
++			excluded: map[string]bool{},
++		}},
++	})
++	metadata := adapter.InboundContext{
++		IPVersion:   4,
++		Destination: M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 443},
++		ProcessInfo: &adapter.ConnectionOwner{
++			ProcessID: 42, ProcessStartUnixNano: 100, UserId: 501,
++			ProcessPath:          "/usr/bin/curl",
++			AncestorProcessPaths: []string{"/Applications/iTerm.app/Contents/MacOS/iTerm2"},
++		},
++	}
++	for _, domain := range []string{"example.org", "example.com", "sub.blabla.eu"} {
++		metadata.Domain = domain
++		if router.ipFeatPromptFor(&metadata) != nil {
++			t.Fatalf("domain %q should follow global route without prompting", domain)
++		}
++	}
++	for _, domain := range []string{"blabla.eu", "evilcom", "other.org"} {
++		metadata.Domain = domain
++		if router.ipFeatPromptFor(&metadata) == nil {
++			t.Fatalf("domain %q should still prompt", domain)
++		}
++	}
++	metadata.ProcessInfo.ProcessPath = "/opt/homebrew/bin/brew"
++	metadata.ProcessInfo.AncestorProcessPaths = nil
++	metadata.Domain = "example.com"
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("global domain route should also bypass an unknown-process prompt")
++	}
++	metadata.Domain = "other.org"
++	if prompt := router.ipFeatPromptFor(&metadata); prompt == nil || !prompt.unknown {
++		t.Fatal("unmatched domain should still prompt for an unknown process")
++	}
++}
++
++func TestIPFeatUnknownPromptUsesProcessLaunchIdentity(t *testing.T) {
++	router := &Router{}
++	router.livePolicy.Store(&ipFeatLivePolicy{
++		socketPath: "/tmp/ipfeat-test.sock", askUnknownProcesses: true,
++		knownPaths:    map[string]bool{"/usr/bin/ssh": true},
++		knownPatterns: []*regexp.Regexp{regexp.MustCompile(`^/Applications/iTerm\.app/.+$`)},
++	})
++	owner := &adapter.ConnectionOwner{
++		ProcessID: 42, ProcessStartUnixNano: 100, UserId: 501,
++		ProcessPath: "/opt/homebrew/bin/brew",
++	}
++	metadata := adapter.InboundContext{
++		IPVersion: 4, Destination: M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 443},
++		ProcessInfo: owner,
++	}
++	prompt := router.ipFeatPromptFor(&metadata)
++	if prompt == nil || !prompt.unknown {
++		t.Fatal("unlisted user process must prompt")
++	}
++	key := ipFeatPromptKey(prompt, owner)
++	owner.ProcessStartUnixNano = 101
++	if key == ipFeatPromptKey(prompt, owner) {
++		t.Fatal("new process launch must get a new choice")
++	}
++	owner.ProcessPath = "/usr/bin/ssh"
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("listed command must not prompt")
++	}
++	owner.ProcessPath = "/opt/homebrew/bin/brew"
++	owner.AncestorProcessPaths = []string{"/Applications/iTerm.app/Contents/MacOS/iTerm2"}
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("child of listed application is not unlisted")
++	}
++	owner.AncestorProcessPaths = nil
++	metadata.Destination.Addr = netip.MustParseAddr("192.168.11.130")
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("local IPv4 must not prompt")
++	}
++	metadata.Destination.Addr = netip.MustParseAddr("8.8.8.8")
++	owner.ProcessStartUnixNano = 0
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("unverified process start must not prompt")
++	}
++}
++
++func TestIPFeatUnknownPromptIncludesSystemProcesses(t *testing.T) {
++	router := &Router{}
++	router.livePolicy.Store(&ipFeatLivePolicy{
++		socketPath: "/tmp/ipfeat-test.sock", askUnknownProcesses: true,
++	})
++	metadata := adapter.InboundContext{
++		IPVersion: 4,
++		Destination: M.Socksaddr{Addr: netip.MustParseAddr("17.253.144.10"), Port: 443},
++		ProcessInfo: &adapter.ConnectionOwner{
++			ProcessID: 42, ProcessStartUnixNano: 100,
++			ProcessPath: "/System/Library/CoreServices/Software Update.app/Contents/Resources/softwareupdated",
++		},
++	}
++	for _, uid := range []int32{0, 200, 501} {
++		metadata.ProcessInfo.UserId = uid
++		if prompt := router.ipFeatPromptFor(&metadata); prompt == nil || !prompt.unknown {
++			t.Fatalf("unlisted process with UID %d must prompt", uid)
++		}
++	}
++	metadata.ProcessInfo.ProcessID = uint32(os.Getpid())
++	if router.ipFeatPromptFor(&metadata) != nil {
++		t.Fatal("sing-box must not prompt for its own connection")
++	}
++}
++
++func TestIPFeatRemovedSavedRouteClearsOldProcessChoice(t *testing.T) {
++	router := &Router{}
++	router.livePolicy.Store(&ipFeatLivePolicy{
++		knownPaths: map[string]bool{"/opt/homebrew/bin/brew": true, "/usr/bin/git": true},
++	})
++	brewKey := "unknown\x00501\x0042\x00100\x00/opt/homebrew/bin/brew"
++	gitKey := "unknown\x00501\x0043\x00100\x00/usr/bin/git"
++	router.promptChoices = map[string]*ipFeatPromptChoice{
++		brewKey: {ready: make(chan struct{})},
++		gitKey:  {ready: make(chan struct{})},
++	}
++	err := router.ApplyipFeatRules([]byte(`{"rules":[],"known_process_paths":["/usr/bin/git"]}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, found := router.promptChoices[brewKey]; found {
++		t.Fatal("removed saved route kept the old per-process decision")
++	}
++	if _, found := router.promptChoices[gitKey]; !found {
++		t.Fatal("unrelated per-process decision was removed")
++	}
++}
+diff --git a/route/process_cache.go b/route/process_cache.go
+index f99ceba..c773255 100644
+--- a/route/process_cache.go
++++ b/route/process_cache.go
+@@ -3,6 +3,7 @@ package route
+ import (
+ 	"context"
+ 	"net/netip"
++	"runtime"
+ 	"slices"
+ 	"strings"
+ 
+@@ -22,6 +23,11 @@ type processCacheEntry struct {
+ }
+ 
+ func (r *Router) findProcessInfoCached(ctx context.Context, network string, source netip.AddrPort, destination netip.AddrPort) (*adapter.ConnectionOwner, error) {
++	// macOS can reuse a local port while the router lives for days. A cached
++	// owner would then make the next program inherit the previous one's route.
++	if runtime.GOOS == "darwin" && r.livePolicy.Load() != nil {
++		return process.FindProcessInfo(r.processSearcher, ctx, network, source, destination)
++	}
+ 	key := processCacheKey{
+ 		Network:     network,
+ 		Source:      source,
+diff --git a/route/route.go b/route/route.go
+index bf25bae..3ddc2ce 100644
+--- a/route/route.go
++++ b/route/route.go
+@@ -353,7 +353,10 @@ func (r *Router) PreMatch(metadata adapter.InboundContext, firstPacket []byte) a
+ 	if err != nil {
+ 		return continueResult
+ 	}
+-	for currentRuleIndex, currentRule := range r.rules {
++	if r.ipFeatPromptFor(&metadata) != nil {
++		return continueResult
++	}
++	for currentRuleIndex, currentRule := range r.currentRules() {
+ 		metadata.ResetRuleCache()
+ 		if !currentRule.Match(&metadata) {
+ 			continue
+@@ -628,9 +631,9 @@ func (r *Router) matchRule(
+ 	if fatalErr != nil {
+ 		return
+ 	}
+-
++	promptChecked := false
+ match:
+-	for currentRuleIndex, currentRule := range r.rules {
++	for currentRuleIndex, currentRule := range r.currentRules() {
+ 		metadata.ResetRuleCache()
+ 		if !currentRule.Match(metadata) {
+ 			continue
+@@ -716,6 +719,13 @@ match:
+ 		if actionType == C.RuleActionTypeRoute ||
+ 			actionType == C.RuleActionTypeReject ||
+ 			actionType == C.RuleActionTypeHijackDNS {
++			if !promptChecked {
++				promptChecked = true
++				if decision := r.ipFeatPromptRule(ctx, metadata); decision != nil {
++					selectedRule = decision
++					return
++				}
++			}
+ 			selectedRule = currentRule
+ 			selectedRuleIndex = currentRuleIndex
+ 			break match
+@@ -725,6 +735,13 @@ match:
+ 			if bypassAction.Outbound == "" {
+ 				continue match
+ 			}
++			if !promptChecked {
++				promptChecked = true
++				if decision := r.ipFeatPromptRule(ctx, metadata); decision != nil {
++					selectedRule = decision
++					return
++				}
++			}
+ 			selectedRule = currentRule
+ 			selectedRuleIndex = currentRuleIndex
+ 			break match
+diff --git a/route/router.go b/route/router.go
+index 0673dde..f69fea6 100644
+--- a/route/router.go
++++ b/route/router.go
+@@ -4,6 +4,8 @@ import (
+ 	"context"
+ 	"os"
+ 	"runtime"
++	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/sagernet/sing-box/adapter"
+@@ -35,6 +37,10 @@ type Router struct {
+ 	network           adapter.NetworkManager
+ 	httpClientManager adapter.HTTPClientManager
+ 	rules             []adapter.Rule
++	livePolicy        atomic.Pointer[ipFeatLivePolicy]
++	promptAccess      sync.Mutex
++	promptChoices     map[string]*ipFeatPromptChoice
++	promptPending     int
+ 	needFindProcess   bool
+ 	needFindNeighbor  bool
+ 	leaseFiles        []string
+@@ -233,6 +239,13 @@ func (r *Router) RuleSet(tag string) (adapter.RuleSet, bool) {
+ }
+ 
+ func (r *Router) Rules() []adapter.Rule {
++	return r.currentRules()
++}
++
++func (r *Router) currentRules() []adapter.Rule {
++	if policy := r.livePolicy.Load(); policy != nil {
++		return policy.rules
++	}
+ 	return r.rules
+ }
+ 
+diff --git a/route/rule/rule_default.go b/route/rule/rule_default.go
+index 7950b7e..123d0ce 100644
+--- a/route/rule/rule_default.go
++++ b/route/rule/rule_default.go
+@@ -200,6 +200,14 @@ func NewDefaultRule(ctx context.Context, logger log.ContextLogger, options optio
+ 		rule.items = append(rule.items, item)
+ 		rule.allItems = append(rule.allItems, item)
+ 	}
++	if len(options.AncestorProcessPathRegex) > 0 {
++		item, err := NewAncestorProcessPathRegexItem(options.AncestorProcessPathRegex)
++		if err != nil {
++			return nil, E.Cause(err, "ancestor_process_path_regex")
++		}
++		rule.items = append(rule.items, item)
++		rule.allItems = append(rule.allItems, item)
++	}
+ 	if len(options.PackageName) > 0 {
+ 		item := NewPackageNameItem(options.PackageName)
+ 		rule.items = append(rule.items, item)
+diff --git a/route/rule/rule_headless.go b/route/rule/rule_headless.go
+index b131a5e..633e5a2 100644
+--- a/route/rule/rule_headless.go
++++ b/route/rule/rule_headless.go
+@@ -144,6 +144,14 @@ func NewDefaultHeadlessRule(ctx context.Context, options option.DefaultHeadlessR
+ 		rule.items = append(rule.items, item)
+ 		rule.allItems = append(rule.allItems, item)
+ 	}
++	if len(options.AncestorProcessPathRegex) > 0 {
++		item, err := NewAncestorProcessPathRegexItem(options.AncestorProcessPathRegex)
++		if err != nil {
++			return nil, E.Cause(err, "ancestor_process_path_regex")
++		}
++		rule.items = append(rule.items, item)
++		rule.allItems = append(rule.allItems, item)
++	}
+ 	if len(options.PackageName) > 0 {
+ 		item := NewPackageNameItem(options.PackageName)
+ 		rule.items = append(rule.items, item)
+diff --git a/route/rule/rule_item_process_path_regex.go b/route/rule/rule_item_process_path_regex.go
+index 76cf67b..e50411f 100644
+--- a/route/rule/rule_item_process_path_regex.go
++++ b/route/rule/rule_item_process_path_regex.go
+@@ -14,9 +14,18 @@ var _ RuleItem = (*ProcessPathRegexItem)(nil)
+ type ProcessPathRegexItem struct {
+ 	matchers    []*regexp.Regexp
+ 	description string
++	ancestors   bool
+ }
+ 
+ func NewProcessPathRegexItem(expressions []string) (*ProcessPathRegexItem, error) {
++	return newProcessPathRegexItem(expressions, false)
++}
++
++func NewAncestorProcessPathRegexItem(expressions []string) (*ProcessPathRegexItem, error) {
++	return newProcessPathRegexItem(expressions, true)
++}
++
++func newProcessPathRegexItem(expressions []string, ancestors bool) (*ProcessPathRegexItem, error) {
+ 	matchers := make([]*regexp.Regexp, 0, len(expressions))
+ 	for i, regex := range expressions {
+ 		matcher, err := regexp.Compile(regex)
+@@ -34,16 +43,25 @@ func NewProcessPathRegexItem(expressions []string) (*ProcessPathRegexItem, error
+ 	} else {
+ 		description += F.ToString("[", strings.Join(expressions, " "), "]")
+ 	}
+-	return &ProcessPathRegexItem{matchers, description}, nil
++	if ancestors {
++		description = "ancestor_" + description
++	}
++	return &ProcessPathRegexItem{matchers, description, ancestors}, nil
+ }
+ 
+ func (r *ProcessPathRegexItem) Match(metadata *adapter.InboundContext) bool {
+-	if metadata.ProcessInfo == nil || metadata.ProcessInfo.ProcessPath == "" {
++	if metadata.ProcessInfo == nil {
+ 		return false
+ 	}
+-	for _, matcher := range r.matchers {
+-		if matcher.MatchString(metadata.ProcessInfo.ProcessPath) {
+-			return true
++	paths := []string{metadata.ProcessInfo.ProcessPath}
++	if r.ancestors {
++		paths = metadata.ProcessInfo.AncestorProcessPaths
++	}
++	for _, path := range paths {
++		for _, matcher := range r.matchers {
++			if matcher.MatchString(path) {
++				return true
++			}
+ 		}
+ 	}
+ 	return false
+diff --git a/route/rule/rule_item_process_path_regex_test.go b/route/rule/rule_item_process_path_regex_test.go
+new file mode 100644
+index 0000000..baaddcc
+--- /dev/null
++++ b/route/rule/rule_item_process_path_regex_test.go
+@@ -0,0 +1,26 @@
++package rule
++
++import (
++	"testing"
++
++	"github.com/sagernet/sing-box/adapter"
++)
++
++func TestAncestorProcessRegexDoesNotMatchCurrentProcess(t *testing.T) {
++	item, err := NewAncestorProcessPathRegexItem([]string{`^/Applications/iTerm.app/.+$`})
++	if err != nil {
++		t.Fatal(err)
++	}
++	metadata := adapter.InboundContext{ProcessInfo: &adapter.ConnectionOwner{
++		ProcessPath:          "/usr/bin/ssh",
++		AncestorProcessPaths: []string{"/bin/zsh", "/Applications/iTerm.app/Contents/MacOS/iTerm2"},
++	}}
++	if !item.Match(&metadata) {
++		t.Fatal("iTerm ancestor was not matched")
++	}
++	metadata.ProcessInfo.AncestorProcessPaths = []string{"/bin/zsh"}
++	metadata.ProcessInfo.ProcessPath = "/Applications/iTerm.app/Contents/MacOS/iTerm2"
++	if item.Match(&metadata) {
++		t.Fatal("ancestor rule matched only the current executable")
++	}
++}
+diff --git a/route/rule/rule_set.go b/route/rule/rule_set.go
+index 4eb2465..5549c1e 100644
+--- a/route/rule/rule_set.go
++++ b/route/rule/rule_set.go
+@@ -61,7 +61,7 @@ func HasHeadlessRule(rules []option.HeadlessRule, cond func(rule option.DefaultH
+ }
+ 
+ func isProcessHeadlessRule(rule option.DefaultHeadlessRule) bool {
+-	return len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0 || len(rule.PackageName) > 0 || len(rule.PackageNameRegex) > 0
++	return len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0 || len(rule.AncestorProcessPathRegex) > 0 || len(rule.PackageName) > 0 || len(rule.PackageNameRegex) > 0
+ }
+ 
+ func isWIFIHeadlessRule(rule option.DefaultHeadlessRule) bool {
+diff --git a/route/rule/rule_set_local.go b/route/rule/rule_set_local.go
+index 9d5d21e..28ad357 100644
+--- a/route/rule/rule_set_local.go
++++ b/route/rule/rule_set_local.go
+@@ -82,6 +82,8 @@ func (s *LocalRuleSet) Name() string {
+ }
+ 
+ func (s *LocalRuleSet) String() string {
++	s.access.RLock()
++	defer s.access.RUnlock()
+ 	return strings.Join(F.MapToString(s.rules), " ")
+ }
+ 
+@@ -177,7 +179,9 @@ func (s *LocalRuleSet) DecRef() {
+ 
+ func (s *LocalRuleSet) Cleanup() {
+ 	if s.refs.Load() == 0 {
++		s.access.Lock()
+ 		s.rules = nil
++		s.access.Unlock()
+ 	}
+ }
+ 
+@@ -194,14 +198,20 @@ func (s *LocalRuleSet) UnregisterCallback(element *list.Element[adapter.RuleSetU
+ }
+ 
+ func (s *LocalRuleSet) Close() error {
++	s.access.Lock()
+ 	s.rules = nil
++	s.access.Unlock()
+ 	return common.Close(common.PtrOrNil(s.watcher))
+ }
+ 
+ func (s *LocalRuleSet) Match(metadata *adapter.InboundContext) bool {
++	s.access.RLock()
++	defer s.access.RUnlock()
+ 	return matchAnyHeadlessRule(s.rules, metadata)
+ }
+ 
+ func (s *LocalRuleSet) mergeableRule() *DefaultHeadlessRule {
++	s.access.RLock()
++	defer s.access.RUnlock()
+ 	return mergeableRuleIn(s.rules)
+ }
+diff --git a/route/rule_conds.go b/route/rule_conds.go
+index 716a19b..f48f716 100644
+--- a/route/rule_conds.go
++++ b/route/rule_conds.go
+@@ -38,7 +38,7 @@ func hasDNSRule(rules []option.DNSRule, cond func(rule option.DefaultDNSRule) bo
+ }
+ 
+ func isProcessRule(rule option.DefaultRule) bool {
+-	return len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0 || len(rule.PackageName) > 0 || len(rule.PackageNameRegex) > 0 || len(rule.User) > 0 || len(rule.UserID) > 0
++	return len(rule.ProcessName) > 0 || len(rule.ProcessPath) > 0 || len(rule.ProcessPathRegex) > 0 || len(rule.AncestorProcessPathRegex) > 0 || len(rule.PackageName) > 0 || len(rule.PackageNameRegex) > 0 || len(rule.User) > 0 || len(rule.UserID) > 0
+ }
+ 
+ func isProcessDNSRule(rule option.DefaultDNSRule) bool {

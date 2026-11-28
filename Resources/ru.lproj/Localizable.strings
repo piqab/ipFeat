@@ -36,7 +36,7 @@
 "Add several cloud or local models and select the one used by the ? button in a route prompt. AI only explains the process; you choose the route." = "Добавьте облачные или локальные модели и выберите модель для кнопки «?» в запросе маршрута. ИИ объясняет назначение процесса; маршрут выбираете вы.";
 "Ask AI what this process may be" = "Спросите, что это за процесс";
 "Ask for a route for unlisted processes" = "Запросить маршрут для незарегистрированных процессов";
-"At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-6. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections." = "При первом соединении с публичным IPv4 незарегистрированной программы, команды или фонового процесса будет предложен маршрут. «Сохранить маршрут» добавит постоянное правило в раздел «Программы → Сохранено из запросов». «На один раз» действует только для текущего запуска. Требуется патч 1.14.4-6. Через 20 секунд без ответа первое соединение блокируется, но окно остаётся открытым для следующих соединений.";
+"At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-8. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections." = "При первом соединении с публичным IPv4 незарегистрированной программы, команды или фонового процесса будет предложен маршрут. «Сохранить маршрут» добавит постоянное правило в раздел «Программы → Сохранено из запросов». «На один раз» действует только для текущего запуска. Требуется патч 1.14.4-8. Через 20 секунд без ответа первое соединение блокируется, но окно остаётся открытым для следующих соединений.";
 "Block public internet" = "Блокировать публичный интернет";
 "Category" = "Категория";
 "DeepSeek · Anthropic-compatible" = "DeepSeek · совместимо с Anthropic";
@@ -122,7 +122,7 @@
 "Add domain rule" = "Добавить доменное правило";
 "Search domains" = "Поиск доменов";
 "For example: *.com → direct, *.blabla.eu → proxy" = "Например: *.com → direct, *.blabla.eu → proxy";
-"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-6 to skip process prompts for matching domains. Only IPv4 connections are routed." = "Правила действуют для всех программ до их обычного маршрута. Заблокированная программа остаётся заблокированной. Более точные домены имеют приоритет. Установите патч 1.14.4-6, чтобы совпавшие домены не вызывали запрос маршрута. Маршрутизируется только IPv4.";
+"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-8 to skip process prompts for matching domains. Only IPv4 connections are routed." = "Правила действуют для всех программ до их обычного маршрута. Заблокированная программа остаётся заблокированной. Более точные домены имеют приоритет. Установите патч 1.14.4-8, чтобы совпавшие домены не вызывали запрос маршрута. Маршрутизируется только IPv4.";
 "Domain route" = "Доменный маршрут";
 "Use an exact name such as example.com or a subdomain mask such as *.example.com. The mask does not include example.com itself." = "Укажите точное имя, например example.com, или маску поддоменов, например *.example.com. Маска не включает сам example.com.";
 "Enabled" = "Включено";
@@ -187,9 +187,9 @@
 "Migrate previous service to ipFeat" = "Перенести прежнюю службу в ipFeat";
 "Launch at login" = "Запускать при входе в систему";
 "Could not change launch at login: %@" = "Не удалось изменить автозапуск: %@";
-"Search apps, groups, commands and saved processes" = "Поиск программ, групп, команд и сохранённых процессов";
+"Search apps, groups and saved processes" = "Поиск программ, групп и сохранённых процессов";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "Зашифрованный архив содержит маршруты, ожидающие установки VPS, клиентские и серверные JSON, настройки ИИ и доступные ключи API. Если серверный конфиг недоступен, экспорт остановится. Программы, файлы sing-box и системная служба в архив не входят.";
-"Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld" = "Профили: %ld · группы: %ld · программы: %ld · команды: %ld · сохранённые маршруты: %ld · клиентские подключения: %ld";
+"Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld" = "Профили: %ld · группы: %ld · программы: %ld · сохранённые маршруты: %ld · клиентские подключения: %ld";
 "Traffic" = "Трафик";
 "Today" = "Сегодня";
 "This month" = "Этот месяц";
@@ -207,3 +207,17 @@
 "No traffic data yet. Update the ipFeat sing-box patch and start the network service." = "Данных о трафике пока нет. Обновите патч sing-box в ipFeat и запустите сетевую службу.";
 "A child process is counted under the nearest registered parent application. Connections without a verified owner remain in route totals." = "Дочерний процесс учитывается у ближайшей зарегистрированной родительской программы. Соединения без подтверждённого владельца входят только в итог маршрута.";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "Зашифрованный архив содержит маршруты, ожидающие установки VPS, клиентские и серверные JSON, настройки ИИ и доступные ключи API, а также историю трафика и точки сброса счётчиков. Если серверный конфиг недоступен, экспорт остановится. Программы, файлы sing-box и системная служба в архив не входят.";
+"Choose a personal route for this program." = "Выберите личный маршрут для этой программы.";
+"Choosing a personal route moves this program out of its group." = "Выбор личного маршрута перенесёт программу из группы.";
+"Sort routes" = "Сортировка маршрутов";
+"Sort programs" = "Сортировка программ";
+"Name A–Z" = "Название А–Я";
+"Name Z–A" = "Название Я–А";
+"Current traffic ↓+↑" = "Текущая скорость ↓+↑";
+"Current download ↓" = "Сейчас получено ↓";
+"Current upload ↑" = "Сейчас отправлено ↑";
+"Period traffic ↓+↑" = "За период ↓+↑";
+"Period download ↓" = "Получено за период ↓";
+"Period upload ↑" = "Отправлено за период ↑";
+"Route A–Z" = "Маршрут А–Я";
+"Route Z–A" = "Маршрут Я–А";

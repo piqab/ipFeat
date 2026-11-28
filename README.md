@@ -1,6 +1,6 @@
 # ipFeat
 
-ipFeat is a macOS routing app for programs, terminal commands, and domains. It builds IPv4 sing-box configurations from saved server connections and applies per-program rules through a managed TUN. The app has a Dock icon and a compact menu bar panel.
+ipFeat is a macOS routing app for programs, child processes, and domains. It builds IPv4 sing-box configurations from saved server connections and applies per-program rules through a managed TUN. The app has a Dock icon and a compact menu bar panel.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ open "dist/ipFeat.app"
 
 After a pull request is merged into `main`, [the release workflow](.github/workflows/release.yml) builds the arm64 app and pinned patch on a GitHub macOS runner. It reads the app version from `Resources/Info.plist`, runs Swift tests, and creates a release named `ipfeat-VERSION` with a ZIP and SHA-256 checksum. A later push with the same version does not replace the release. Bump the app version for each new release. The app is currently signed ad hoc and is not notarized. On a Mac that blocks its first launch, use Apple's [Open Anyway](https://support.apple.com/en-us/102445) steps in System Settings → Privacy & Security after verifying the download.
 
-On first launch, open **sing-box** to install the bundled patch and the managed network service. The service runs sing-box at login, maintains `utun100`, and applies a PF kill switch. **sing-box** also contains the interface language and launch-at-login settings. The **Programs**, **Profiles**, and **AI** tabs handle routing rules, named routes, and process explanations.
+On first launch, open **sing-box** to install the bundled patch and the managed network service. The service runs sing-box at login, maintains `utun100`, and applies a PF kill switch for every UID. A dedicated `_ipfeat_engine` group lets only sing-box itself open physical outbound sockets. **sing-box** also contains the interface language and launch-at-login settings. The **Programs**, **Profiles**, and **AI** tabs handle routing rules, named routes, and process explanations.
 
 If you need to stop the managed service and clear its PF rule from Terminal, run:
 
@@ -31,9 +31,10 @@ sudo ipfeat-recover
 ## Routing
 
 - **Profiles** contain saved server outbounds plus **Local network**, **This Mac only**, and **No network**. A group route applies to all its programs. An ungrouped program can use its personal profile. The default route covers everything else.
-- **Programs** lists groups, ungrouped apps, terminal commands, and routes saved from prompts. Its shared search field sits directly above the program list and searches names and executable paths. Domain rules have their own search field.
+- **Programs** lists groups, ungrouped apps, and routes saved from prompts. Its shared search field sits directly above the program list and searches names and executable paths. Domain rules have their own search field.
+- **Traffic** has independent sort menus for routes and programs: name in either direction, current combined/download/upload speed, or combined/download/upload bytes in the selected period. Programs can also be sorted by route name. Grouped programs use their group's color, and the route button sits below each program name. Assigning a personal route to a grouped program moves it out of its group so the other members keep their group route.
 - **Domain routes** apply across programs, with exact patterns such as `example.com` and suffix patterns such as `*.example.com`. More specific rules win. Matching requires a known hostname; connections made directly to an IP address cannot match a domain rule.
-- Programs and commands can allow direct access to local IPv4 networks while public traffic follows a proxy or another selected route. Generated DNS and routing use IPv4; IPv6 connections are rejected.
+- Programs can allow direct access to local IPv4 networks while public traffic follows a proxy or another selected route. Generated DNS and routing use IPv4; IPv6 connections are rejected.
 - The shared WebKit networking process can use a selected profile. This can affect embedded pages in several programs.
 
 The bundled sing-box patch reloads app, command, and domain policy without restarting the TUN, so existing flows keep their route during ordinary rule changes. It attributes child traffic through a verified process ancestry. Newly added apps ask for a route when an unknown child command makes its first public IPv4 connection. An optional setting also prompts for unlisted apps and background processes. **Save route** creates a lasting rule; **Use once** applies to the current process launch. An unanswered first connection is blocked after 20 seconds, while the prompt stays open for later connections. Base DNS, TUN, or outbound changes still require a service restart. See [NETWORK_ROUTING_SETUP.md](NETWORK_ROUTING_SETUP.md) for rule order and network behavior.
@@ -56,7 +57,7 @@ The **Installation / Check…** view checks a saved VPS and can migrate an earli
 
 The rename from IP Informer to ipFeat changes the app bundle identifier, support directories, Keychain service names, and managed service names. On first launch, ipFeat copies existing user settings and support files without overwriting new data, and reads old Keychain records when needed. Installing the ipFeat network service replaces the old LaunchDaemon and PF anchor after validating the new configuration. The old support directory remains as a rollback copy. If an old login item is still registered, turn it off in the old app and enable **Launch at login** in ipFeat.
 
-The local patched engine is pinned to sing-box `1.14.4-7`. Automatic installation of an unrelated official engine version is disabled while the patch is active. VPS installations use official sing-box releases. For patch behavior and future ports, see [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
+The local patched engine is pinned to sing-box `1.14.4-8`. Automatic installation of an unrelated official engine version is disabled while the patch is active. VPS installations use official sing-box releases. For patch behavior and future ports, see [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
 
 ## Traffic statistics
 

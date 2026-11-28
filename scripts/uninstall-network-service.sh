@@ -19,6 +19,7 @@ fi
 /bin/rm -f "/Library/Application Support/ipFeat/ipfeat-supervisor.sh"
 /bin/rm -f "/Library/Application Support/ipFeat/ipFeatUpdater"
 /bin/rm -f /usr/local/bin/ipfeat-recover
+/usr/bin/dscl . -delete /Groups/_ipfeat_engine 2>/dev/null || true
 
 echo "Service removed and kill switch cleared."
 echo "The anchor declaration remains in /etc/pf.conf but contains no active rules."
