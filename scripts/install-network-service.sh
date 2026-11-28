@@ -135,22 +135,62 @@ fi
 
 PF_MAIN="/etc/pf.conf"
 PF_ANCHOR="/etc/pf.anchors/com.ipfeat"
+ENGINE_GROUP="_ipfeat_engine"
+if ! /usr/bin/dscl . -read "/Groups/$ENGINE_GROUP" PrimaryGroupID >/dev/null 2>&1; then
+    ENGINE_GID=$(/usr/bin/dscl . -list /Groups PrimaryGroupID | /usr/bin/awk '
+        $2 ~ /^[0-9]+$/ { used[$2] = 1 }
+        END { for (gid = 30000; gid < 40000; gid++) if (!(gid in used)) { print gid; exit } }
+    ')
+    [[ -n "$ENGINE_GID" ]] || { echo "No free group ID for the sing-box service"; exit 1; }
+    /usr/bin/dscl . -create "/Groups/$ENGINE_GROUP" PrimaryGroupID "$ENGINE_GID"
+    /usr/bin/dscl . -create "/Groups/$ENGINE_GROUP" Password '*'
+fi
+ENGINE_GID=$(/usr/bin/dscl . -read "/Groups/$ENGINE_GROUP" PrimaryGroupID | /usr/bin/awk '$1 == "PrimaryGroupID:" { print $2 }')
+[[ "$ENGINE_GID" =~ '^[0-9]+$' ]] || { echo "The sing-box service group has no numeric ID"; exit 1; }
 PF_SNAPSHOT=$(/usr/bin/mktemp)
 /bin/cp "$PF_MAIN" "$PF_SNAPSHOT"
+PF_ANCHOR_SNAPSHOT=$(/usr/bin/mktemp)
+PF_ANCHOR_EXISTED=false
+if [[ -f "$PF_ANCHOR" ]]; then
+    /bin/cp "$PF_ANCHOR" "$PF_ANCHOR_SNAPSHOT"
+    PF_ANCHOR_EXISTED=true
+fi
+PLIST_SNAPSHOT=$(/usr/bin/mktemp)
+PLIST_EXISTED=false
+if [[ -f "$PLIST" ]]; then
+    /bin/cp "$PLIST" "$PLIST_SNAPSHOT"
+    PLIST_EXISTED=true
+fi
 OLD_SERVICE_STOPPED=false
+CURRENT_SERVICE_STOPPED=false
 MIGRATION_COMMITTED=false
 restore_on_failure() {
     if [[ "$MIGRATION_COMMITTED" != true ]]; then
+        if [[ "$CURRENT_SERVICE_STOPPED" == true ]]; then
+            /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+        fi
+        if [[ "$PLIST_EXISTED" == true ]]; then
+            /bin/cp "$PLIST_SNAPSHOT" "$PLIST" 2>/dev/null || true
+        else
+            /bin/rm -f "$PLIST"
+        fi
+        if [[ "$PF_ANCHOR_EXISTED" == true ]]; then
+            /bin/cp "$PF_ANCHOR_SNAPSHOT" "$PF_ANCHOR" 2>/dev/null || true
+        else
+            /bin/rm -f "$PF_ANCHOR"
+        fi
         /bin/cp "$PF_SNAPSHOT" "$PF_MAIN" 2>/dev/null || true
         /sbin/pfctl -f "$PF_MAIN" >/dev/null 2>&1 || true
+        if [[ "$CURRENT_SERVICE_STOPPED" == true && "$PLIST_EXISTED" == true ]]; then
+            /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+        fi
         if [[ "$OLD_SERVICE_STOPPED" == true ]]; then
-            /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
             /bin/launchctl bootstrap system "$LEGACY_PLIST" 2>/dev/null || true
             /bin/launchctl bootstrap system "$LEGACY_UPDATER_PLIST" 2>/dev/null || true
             echo "The prior IP Informer service was restored." >&2
         fi
     fi
-    /bin/rm -f "$PF_SNAPSHOT"
+    /bin/rm -f "$PF_SNAPSHOT" "$PF_ANCHOR_SNAPSHOT" "$PLIST_SNAPSHOT"
 }
 trap restore_on_failure EXIT
 
@@ -192,6 +232,7 @@ fi
 # A single TUN owner is mandatory. Stop the previous installation only after
 # validating the new configuration, installing its files and staging PF.
 /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+CURRENT_SERVICE_STOPPED=true
 if [[ -f "$LEGACY_PLIST" ]]; then
     /bin/launchctl bootout system "$LEGACY_UPDATER_PLIST" 2>/dev/null || true
     /bin/launchctl bootout system "$LEGACY_PLIST" 2>/dev/null || true
@@ -227,8 +268,6 @@ for _ in {1..20}; do
     /bin/sleep 0.25
 done
 if [[ "$TUN_READY" != true ]]; then
-    /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
-    /sbin/pfctl -a com.ipfeat -F all 2>/dev/null || true
     echo "sing-box did not create utun100; the previous service will be restored if present."
     echo "See $LOG_DIR/network.log"
     exit 1

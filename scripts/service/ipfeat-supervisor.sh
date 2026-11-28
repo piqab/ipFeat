@@ -21,6 +21,11 @@ stop_child() {
 trap 'stop_child; exit 0' TERM INT
 
 while true; do
+    if [[ $(/usr/bin/id -gn) != _ipfeat_engine ]]; then
+        log_message "engine service group is not _ipfeat_engine; refusing to start sing-box"
+        /bin/sleep 5
+        continue
+    fi
     if [[ ! -x "$SING_BOX" ]]; then
         log_message "sing-box executable not found: $SING_BOX"
         /bin/sleep 5

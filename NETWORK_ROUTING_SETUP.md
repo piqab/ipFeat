@@ -63,11 +63,6 @@ cd /path/to/ipfeat
 sudo scripts/install-network-service.sh
 ```
 
-PF passes `lo0` traffic, including localhost Docker Desktop ports. It redirects user traffic for private IPv4 destinations into `utun100`, even when macOS has a preferred local route. sing-box then applies app and group policy and uses an allowed direct path when appropriate. If TUN disappears, user traffic remains blocked. ipFeat should be the only owner of its TUN; stop another sing-box service before installation. After changing the bundled PF rule, rerun the installer. To apply only the PF anchor without restarting sing-box:
-
-```sh
-sudo install -o root -g wheel -m 644 scripts/service/com.ipfeat.pf /etc/pf.anchors/com.ipfeat
-sudo pfctl -a com.ipfeat -f /etc/pf.anchors/com.ipfeat
-```
+PF passes `lo0` traffic, including localhost Docker Desktop ports. It redirects traffic from every UID for private IPv4 destinations into `utun100`, even when macOS has a preferred local route. sing-box then applies app and group policy and uses an allowed direct path when appropriate. The installer creates a dedicated `_ipfeat_engine` group and launches the root-owned sing-box service with that group; only its TCP and UDP sockets can leave through the physical interface. Other outbound traffic is blocked outside TUN, including when TUN disappears. ipFeat should be the only owner of its TUN; stop another sing-box service before installation. After changing the bundled PF rule, rerun the installer to update the group, LaunchDaemon and PF anchor together.
 
 The managed service status checks its process and TUN interface locally. The **Check with sing-box** action validates the generated configuration.

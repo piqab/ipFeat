@@ -4,6 +4,10 @@
 <dict>
     <key>Label</key>
     <string>com.ipfeat.network</string>
+    <key>UserName</key>
+    <string>root</string>
+    <key>GroupName</key>
+    <string>_ipfeat_engine</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Library/Application Support/ipFeat/ipfeat-supervisor.sh</string>
