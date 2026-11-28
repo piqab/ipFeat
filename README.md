@@ -1,6 +1,6 @@
 # ipFeat
 
-ipFeat is a macOS routing app for programs, terminal commands, and domains. It builds IPv4 sing-box configurations from saved server connections and applies per-program rules through a managed TUN. The app has a Dock icon and a compact menu bar panel.
+ipFeat is a macOS routing app for programs, child processes, and domains. It builds IPv4 sing-box configurations from saved server connections and applies per-program rules through a managed TUN. The app has a Dock icon and a compact menu bar panel.
 
 ## Requirements
 
@@ -31,9 +31,10 @@ sudo ipfeat-recover
 ## Routing
 
 - **Profiles** contain saved server outbounds plus **Local network**, **This Mac only**, and **No network**. A group route applies to all its programs. An ungrouped program can use its personal profile. The default route covers everything else.
-- **Programs** lists groups, ungrouped apps, terminal commands, and routes saved from prompts. Its shared search field sits directly above the program list and searches names and executable paths. Domain rules have their own search field.
+- **Programs** lists groups, ungrouped apps, and routes saved from prompts. Its shared search field sits directly above the program list and searches names and executable paths. Domain rules have their own search field.
+- **Traffic** lists routes and programs alphabetically. A program's route can be changed there; assigning a personal route to a grouped program moves it out of its group so the other members keep their group route.
 - **Domain routes** apply across programs, with exact patterns such as `example.com` and suffix patterns such as `*.example.com`. More specific rules win. Matching requires a known hostname; connections made directly to an IP address cannot match a domain rule.
-- Programs and commands can allow direct access to local IPv4 networks while public traffic follows a proxy or another selected route. Generated DNS and routing use IPv4; IPv6 connections are rejected.
+- Programs can allow direct access to local IPv4 networks while public traffic follows a proxy or another selected route. Generated DNS and routing use IPv4; IPv6 connections are rejected.
 - The shared WebKit networking process can use a selected profile. This can affect embedded pages in several programs.
 
 The bundled sing-box patch reloads app, command, and domain policy without restarting the TUN, so existing flows keep their route during ordinary rule changes. It attributes child traffic through a verified process ancestry. Newly added apps ask for a route when an unknown child command makes its first public IPv4 connection. An optional setting also prompts for unlisted apps and background processes. **Save route** creates a lasting rule; **Use once** applies to the current process launch. An unanswered first connection is blocked after 20 seconds, while the prompt stays open for later connections. Base DNS, TUN, or outbound changes still require a service restart. See [NETWORK_ROUTING_SETUP.md](NETWORK_ROUTING_SETUP.md) for rule order and network behavior.

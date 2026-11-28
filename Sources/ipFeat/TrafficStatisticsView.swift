@@ -35,7 +35,12 @@ struct TrafficStatisticsView: View {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
                 Text("Routes").font(.headline)
-                let routeTags = Set(store.outboundTags).union(totals.routes.keys).sorted()
+                let routeTags = Set(store.outboundTags).union(totals.routes.keys).sorted { lhs, rhs in
+                    let leftName = store.configuration.outboundDisplayName(for: lhs)
+                    let rightName = store.configuration.outboundDisplayName(for: rhs)
+                    let comparison = leftName.localizedStandardCompare(rightName)
+                    return comparison == .orderedSame ? lhs < rhs : comparison == .orderedAscending
+                }
                 ForEach(routeTags, id: \.self) { tag in
                     trafficRow(title: store.configuration.outboundDisplayName(for: tag), subtitle: tag,
                                bytes: totals.routes[tag] ?? TrafficBytes(),
@@ -47,7 +52,7 @@ struct TrafficStatisticsView: View {
                 ForEach(apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) { app in
                     trafficRow(title: app.name, subtitle: app.executablePath,
                                bytes: totals.applications[app.id] ?? TrafficBytes(),
-                               rate: statistics.applicationRates[app.id] ?? TrafficBytes()) {
+                               rate: statistics.applicationRates[app.id] ?? TrafficBytes(), application: app) {
                         resetTarget = .application(app)
                     }
                 }
@@ -79,13 +84,34 @@ struct TrafficStatisticsView: View {
     }
 
     private func trafficRow(title: String, subtitle: String, bytes: TrafficBytes,
-                            rate: TrafficBytes, reset: @escaping () -> Void) -> some View {
+                            rate: TrafficBytes, application: RoutedApplication? = nil,
+                            reset: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).fontWeight(.medium)
                 Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if let application {
+                Menu {
+                    Button(AppLanguage.localized("Общий маршрут")) {
+                        setApplicationRoute(application, profileID: nil)
+                    }
+                    ForEach(store.configuration.profiles) { profile in
+                        Button(profile.displayName) {
+                            setApplicationRoute(application, profileID: profile.id)
+                        }
+                    }
+                } label: {
+                    Text(applicationRouteLabel(application))
+                        .lineLimit(1)
+                        .font(.caption)
+                }
+                .frame(maxWidth: 190)
+                .help(AppLanguage.localized(application.groupID == nil
+                    ? "Choose a personal route for this program."
+                    : "Choosing a personal route moves this program out of its group."))
+            }
             VStack(alignment: .trailing, spacing: 3) {
                 Text("↑ \(formatted(bytes.upload))  ↓ \(formatted(bytes.download))")
                     .font(.caption.monospacedDigit())
@@ -96,6 +122,23 @@ struct TrafficStatisticsView: View {
         }
         .padding(8)
         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func applicationRouteLabel(_ application: RoutedApplication) -> String {
+        let group = store.configuration.groups.first(where: { $0.id == application.groupID })
+        let profileID = SingBoxConfigurationGenerator.effectiveProfileID(for: application,
+                                                                          configuration: store.configuration)
+        let title = profileID.flatMap { id in
+            store.configuration.profiles.first(where: { $0.id == id })?.displayName
+        } ?? AppLanguage.localized("Общий маршрут")
+        return group.map { "\($0.name) · \(title)" } ?? title
+    }
+
+    private func setApplicationRoute(_ application: RoutedApplication, profileID: UUID?) {
+        guard var updated = store.configuration.applications.first(where: { $0.id == application.id }) else { return }
+        updated.groupID = nil
+        updated.profileID = profileID
+        store.updateApplication(updated)
     }
 
     private func formatted(_ count: Int64) -> String {

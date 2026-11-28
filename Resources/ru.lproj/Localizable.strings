@@ -187,9 +187,9 @@
 "Migrate previous service to ipFeat" = "Перенести прежнюю службу в ipFeat";
 "Launch at login" = "Запускать при входе в систему";
 "Could not change launch at login: %@" = "Не удалось изменить автозапуск: %@";
-"Search apps, groups, commands and saved processes" = "Поиск программ, групп, команд и сохранённых процессов";
+"Search apps, groups and saved processes" = "Поиск программ, групп и сохранённых процессов";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "Зашифрованный архив содержит маршруты, ожидающие установки VPS, клиентские и серверные JSON, настройки ИИ и доступные ключи API. Если серверный конфиг недоступен, экспорт остановится. Программы, файлы sing-box и системная служба в архив не входят.";
-"Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld" = "Профили: %ld · группы: %ld · программы: %ld · команды: %ld · сохранённые маршруты: %ld · клиентские подключения: %ld";
+"Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld" = "Профили: %ld · группы: %ld · программы: %ld · сохранённые маршруты: %ld · клиентские подключения: %ld";
 "Traffic" = "Трафик";
 "Today" = "Сегодня";
 "This month" = "Этот месяц";
@@ -207,3 +207,5 @@
 "No traffic data yet. Update the ipFeat sing-box patch and start the network service." = "Данных о трафике пока нет. Обновите патч sing-box в ipFeat и запустите сетевую службу.";
 "A child process is counted under the nearest registered parent application. Connections without a verified owner remain in route totals." = "Дочерний процесс учитывается у ближайшей зарегистрированной родительской программы. Соединения без подтверждённого владельца входят только в итог маршрута.";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "Зашифрованный архив содержит маршруты, ожидающие установки VPS, клиентские и серверные JSON, настройки ИИ и доступные ключи API, а также историю трафика и точки сброса счётчиков. Если серверный конфиг недоступен, экспорт остановится. Программы, файлы sing-box и системная служба в архив не входят.";
+"Choose a personal route for this program." = "Выберите личный маршрут для этой программы.";
+"Choosing a personal route moves this program out of its group." = "Выбор личного маршрута перенесёт программу из группы.";

@@ -425,9 +425,9 @@
 "Migrate previous service to ipFeat" = "将旧服务迁移至 ipFeat";
 "Launch at login" = "登录时启动";
 "Could not change launch at login: %@" = "无法更改登录启动设置：%@";
-"Search apps, groups, commands and saved processes" = "搜索应用、分组、命令和已保存的进程";
+"Search apps, groups and saved processes" = "搜索应用、分组和已保存的进程";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "加密归档包含路由、待完成的 VPS 安装、客户端和服务器 JSON、AI 设置及可读取的 API 密钥。缺少服务器配置时导出会停止。应用程序、sing-box 可执行文件和系统服务不包含在内。";
-"Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld" = "配置方案：%ld · 分组：%ld · 程序：%ld · 命令：%ld · 已保存路由：%ld · 客户端连接：%ld";
+"Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld" = "配置方案：%ld · 分组：%ld · 程序：%ld · 已保存路由：%ld · 客户端连接：%ld";
 "Traffic" = "流量";
 "Today" = "今天";
 "This month" = "本月";
@@ -445,3 +445,5 @@
 "No traffic data yet. Update the ipFeat sing-box patch and start the network service." = "暂无流量数据。请更新 ipFeat sing-box 补丁并启动网络服务。";
 "A child process is counted under the nearest registered parent application. Connections without a verified owner remain in route totals." = "子进程流量归入最近的已登记父应用。无法验证所属程序的连接只计入路由总量。";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "加密归档包含路由、待完成的 VPS 安装、客户端和服务器 JSON、AI 设置及可读取的 API 密钥，以及流量历史和重置基线。缺少服务器配置时导出会停止。应用程序、sing-box 可执行文件和系统服务不包含在内。";
+"Choose a personal route for this program." = "为此程序选择专属路由。";
+"Choosing a personal route moves this program out of its group." = "选择专属路由会将此程序移出群组。";

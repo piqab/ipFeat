@@ -511,9 +511,9 @@ struct SingBoxSettingsView: View {
                 Text(archiveError).foregroundStyle(.red).font(.caption)
             }
             if mode == .restore, let pendingBackup {
-                Text(String(format: AppLanguage.localized("Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld"),
+                Text(String(format: AppLanguage.localized("Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld"),
                             pendingBackup.routing.profiles.count, pendingBackup.routing.groups.count,
-                            pendingBackup.routing.applications.count, pendingBackup.routing.commands.count,
+                            pendingBackup.routing.applications.count,
                             pendingBackup.routing.savedProcessRoutes.count,
                             pendingBackup.routing.clientConnections.count))
                     .font(.caption)

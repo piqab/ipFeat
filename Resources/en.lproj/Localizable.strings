@@ -357,9 +357,9 @@
 "Migrate previous service to ipFeat" = "Migrate previous service to ipFeat";
 "Launch at login" = "Launch at login";
 "Could not change launch at login: %@" = "Could not change launch at login: %@";
-"Search apps, groups, commands and saved processes" = "Search apps, groups, commands and saved processes";
+"Search apps, groups and saved processes" = "Search apps, groups and saved processes";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.";
-"Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld" = "Profiles: %ld · groups: %ld · apps: %ld · commands: %ld · saved routes: %ld · client connections: %ld";
+"Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld" = "Profiles: %ld · groups: %ld · apps: %ld · saved routes: %ld · client connections: %ld";
 "Traffic" = "Traffic";
 "Today" = "Today";
 "This month" = "This month";
@@ -377,3 +377,5 @@
 "No traffic data yet. Update the ipFeat sing-box patch and start the network service." = "No traffic data yet. Update the ipFeat sing-box patch and start the network service.";
 "A child process is counted under the nearest registered parent application. Connections without a verified owner remain in route totals." = "A child process is counted under the nearest registered parent application. Connections without a verified owner remain in route totals.";
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.";
+"Choose a personal route for this program." = "Choose a personal route for this program.";
+"Choosing a personal route moves this program out of its group." = "Choosing a personal route moves this program out of its group.";
