@@ -887,7 +887,7 @@ struct RoutingSettingsView: View {
     }
 }
 
-private extension RoutingGroupColor {
+extension RoutingGroupColor {
     var displayColor: Color {
         switch self {
         case .blue: return .blue

@@ -6,7 +6,7 @@ private enum TrafficResetTarget {
 }
 
 private enum TrafficSortOption: String, CaseIterable, Identifiable {
-    case nameAscending, nameDescending
+    case nameAscending, nameDescending, routeAscending, routeDescending
     case currentTotal, currentDownload, currentUpload
     case periodTotal, periodDownload, periodUpload
 
@@ -16,6 +16,8 @@ private enum TrafficSortOption: String, CaseIterable, Identifiable {
         switch self {
         case .nameAscending: return "Name A–Z"
         case .nameDescending: return "Name Z–A"
+        case .routeAscending: return "Route A–Z"
+        case .routeDescending: return "Route Z–A"
         case .currentTotal: return "Current traffic ↓+↑"
         case .currentDownload: return "Current download ↓"
         case .currentUpload: return "Current upload ↑"
@@ -33,7 +35,7 @@ private enum TrafficSortOption: String, CaseIterable, Identifiable {
             return overflow ? Int64.max : sum
         case .currentDownload, .periodDownload: return bytes.download
         case .currentUpload, .periodUpload: return bytes.upload
-        case .nameAscending, .nameDescending: return 0
+        case .nameAscending, .nameDescending, .routeAscending, .routeDescending: return 0
         }
     }
 }
@@ -72,7 +74,7 @@ struct TrafficStatisticsView: View {
                 HStack {
                     Text("Routes").font(.headline)
                     Spacer()
-                    sortPicker("Sort routes", selection: $routeSortRaw)
+                    sortPicker("Sort routes", selection: $routeSortRaw, includeRoute: false)
                 }
                 let routeTags = sorted(Array(Set(store.outboundTags).union(totals.routes.keys)),
                                        by: TrafficSortOption(rawValue: routeSortRaw) ?? .nameAscending,
@@ -95,6 +97,7 @@ struct TrafficStatisticsView: View {
                 let sortedApps = sorted(apps,
                                         by: TrafficSortOption(rawValue: programSortRaw) ?? .nameAscending,
                                         name: { $0.name }, tieBreaker: { $0.executablePath },
+                                        route: { effectiveRouteName(for: $0) },
                                         total: { totals.applications[$0.id] ?? TrafficBytes() },
                                         rate: { statistics.applicationRates[$0.id] ?? TrafficBytes() })
                 ForEach(sortedApps) { app in
@@ -131,9 +134,10 @@ struct TrafficStatisticsView: View {
         }
     }
 
-    private func sortPicker(_ title: String, selection: Binding<String>) -> some View {
+    private func sortPicker(_ title: String, selection: Binding<String>, includeRoute: Bool = true) -> some View {
         Picker(LocalizedStringKey(title), selection: selection) {
-            ForEach(TrafficSortOption.allCases) { option in
+            ForEach(TrafficSortOption.allCases.filter { includeRoute ||
+                ($0 != .routeAscending && $0 != .routeDescending) }) { option in
                 Text(LocalizedStringKey(option.title)).tag(option.rawValue)
             }
         }
@@ -143,9 +147,15 @@ struct TrafficStatisticsView: View {
 
     private func sorted<Item>(_ items: [Item], by option: TrafficSortOption,
                               name: (Item) -> String, tieBreaker: (Item) -> String,
+                              route: (Item) -> String = { _ in "" },
                               total: (Item) -> TrafficBytes, rate: (Item) -> TrafficBytes) -> [Item] {
         items.sorted { left, right in
-            if option != .nameAscending && option != .nameDescending {
+            if option == .routeAscending || option == .routeDescending {
+                let comparison = route(left).localizedStandardCompare(route(right))
+                if comparison != .orderedSame {
+                    return option == .routeDescending ? comparison == .orderedDescending : comparison == .orderedAscending
+                }
+            } else if option != .nameAscending && option != .nameDescending {
                 let leftValue = option.value(total: total(left), rate: rate(left))
                 let rightValue = option.value(total: total(right), rate: rate(right))
                 if leftValue != rightValue { return leftValue > rightValue }
@@ -158,35 +168,39 @@ struct TrafficStatisticsView: View {
         }
     }
 
+    private func effectiveRouteName(for application: RoutedApplication) -> String {
+        guard let profileID = SingBoxConfigurationGenerator.effectiveProfileID(for: application,
+                                                                                configuration: store.configuration) else {
+            switch store.selectedDefaultRoute {
+            case .outbound(let tag): return store.configuration.outboundDisplayName(for: tag)
+            case .localOnly: return AppLanguage.localized("Только этот Mac")
+            case .block: return AppLanguage.localized("Без сети")
+            }
+        }
+        return store.configuration.profiles.first(where: { $0.id == profileID })?.displayName
+            ?? AppLanguage.localized("Профиль не найден")
+    }
+
     private func trafficRow(title: String, subtitle: String, bytes: TrafficBytes,
                             rate: TrafficBytes, application: RoutedApplication? = nil,
                             reset: @escaping () -> Void) -> some View {
-        HStack(alignment: .center, spacing: 10) {
+        let groupColor = application.flatMap { app in
+            store.configuration.groups.first(where: { $0.id == app.groupID })?.color.displayColor
+        }
+        return HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).fontWeight(.medium)
+                HStack(spacing: 6) {
+                    if let groupColor {
+                        Circle().fill(groupColor).frame(width: 9, height: 9)
+                    }
+                    Text(title).fontWeight(.medium)
+                }
+                if let application {
+                    applicationRouteMenu(application)
+                }
                 Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let application {
-                Menu {
-                    Button(AppLanguage.localized("Общий маршрут")) {
-                        setApplicationRoute(application, profileID: nil)
-                    }
-                    ForEach(store.configuration.profiles) { profile in
-                        Button(profile.displayName) {
-                            setApplicationRoute(application, profileID: profile.id)
-                        }
-                    }
-                } label: {
-                    Text(applicationRouteLabel(application))
-                        .lineLimit(1)
-                        .font(.caption)
-                }
-                .frame(maxWidth: 190)
-                .help(AppLanguage.localized(application.groupID == nil
-                    ? "Choose a personal route for this program."
-                    : "Choosing a personal route moves this program out of its group."))
-            }
             VStack(alignment: .trailing, spacing: 3) {
                 Text("↑ \(formatted(bytes.upload))  ↓ \(formatted(bytes.download))")
                     .font(.caption.monospacedDigit())
@@ -196,16 +210,36 @@ struct TrafficStatisticsView: View {
             Button("Reset", action: reset).controlSize(.small)
         }
         .padding(8)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .background(groupColor?.opacity(0.07) ?? Color.secondary.opacity(0.07),
+                    in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(groupColor?.opacity(0.3) ?? .clear))
+    }
+
+    private func applicationRouteMenu(_ application: RoutedApplication) -> some View {
+        Menu {
+            Button(AppLanguage.localized("Общий маршрут")) {
+                setApplicationRoute(application, profileID: nil)
+            }
+            ForEach(store.configuration.profiles) { profile in
+                Button(profile.displayName) {
+                    setApplicationRoute(application, profileID: profile.id)
+                }
+            }
+        } label: {
+            Text(applicationRouteLabel(application))
+                .lineLimit(1)
+                .font(.caption)
+        }
+        .controlSize(.small)
+        .frame(maxWidth: 230, alignment: .leading)
+        .help(AppLanguage.localized(application.groupID == nil
+            ? "Choose a personal route for this program."
+            : "Choosing a personal route moves this program out of its group."))
     }
 
     private func applicationRouteLabel(_ application: RoutedApplication) -> String {
         let group = store.configuration.groups.first(where: { $0.id == application.groupID })
-        let profileID = SingBoxConfigurationGenerator.effectiveProfileID(for: application,
-                                                                          configuration: store.configuration)
-        let title = profileID.flatMap { id in
-            store.configuration.profiles.first(where: { $0.id == id })?.displayName
-        } ?? AppLanguage.localized("Общий маршрут")
+        let title = effectiveRouteName(for: application)
         return group.map { "\($0.name) · \(title)" } ?? title
     }
 
