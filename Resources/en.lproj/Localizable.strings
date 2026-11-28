@@ -292,7 +292,7 @@
 "Add domain rule" = "Add domain rule";
 "Search domains" = "Search domains";
 "For example: *.com → direct, *.blabla.eu → proxy" = "For example: *.com → direct, *.blabla.eu → proxy";
-"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-6 to skip process prompts for matching domains. Only IPv4 connections are routed." = "Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-6 to skip process prompts for matching domains. Only IPv4 connections are routed.";
+"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-8 to skip process prompts for matching domains. Only IPv4 connections are routed." = "Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-8 to skip process prompts for matching domains. Only IPv4 connections are routed.";
 "Domain route" = "Domain route";
 "Use an exact name such as example.com or a subdomain mask such as *.example.com. The mask does not include example.com itself." = "Use an exact name such as example.com or a subdomain mask such as *.example.com. The mask does not include example.com itself.";
 "Enabled" = "Enabled";

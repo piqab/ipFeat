@@ -42,7 +42,7 @@ mkdir -p "$CONTENTS_DIR/Resources/engines"
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipfeat-5.sha256" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipfeat-6" \
     "$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipfeat-6.sha256"
-PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipfeat-7"
+PATCH_BINARY="$CONTENTS_DIR/Resources/engines/sing-box-1.14.4-ipfeat-8"
 if [[ -n "${IPFEAT_PATCHED_BINARY:-}" ]]; then
     cp "$IPFEAT_PATCHED_BINARY" "$PATCH_BINARY"
 else

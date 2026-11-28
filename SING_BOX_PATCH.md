@@ -1,6 +1,6 @@
 # ipFeat sing-box patch
 
-This document is the complete source and behavior checklist for porting the local macOS sing-box patch. The base is sing-box `v1.14.4` at commit `c005f35300ce76427dc285481ec5695f5b179cd2`. [Patch revision 7](patches/sing-box-1.14.4-ipfeat-7.patch) is applied by [build-patched-sing-box.sh](scripts/build-patched-sing-box.sh). VPS installations use an official sing-box binary.
+This document is the complete source and behavior checklist for porting the local macOS sing-box patch. The base is sing-box `v1.14.4` at commit `c005f35300ce76427dc285481ec5695f5b179cd2`. [Patch revision 8](patches/sing-box-1.14.4-ipfeat-8.patch) is applied by [build-patched-sing-box.sh](scripts/build-patched-sing-box.sh). VPS installations use an official sing-box binary.
 
 ## Why the local patch exists
 
@@ -24,7 +24,7 @@ The patch changes these 27 sing-box source files. When porting, review each chan
 | `cmd/sing-box/cmd.go` | Register the `--ipfeat-policy` CLI flag. |
 | `cmd/sing-box/cmd_check.go` | Validate the policy alongside the base config in `sing-box check`. |
 | `cmd/sing-box/cmd_run.go` | Load policy before starting, then watch its SHA-256 for live updates. |
-| `cmd/sing-box/cmd_version.go` | Print the exact `ipFeat patch: 1.14.4-7` marker. |
+| `cmd/sing-box/cmd_version.go` | Print the exact `ipFeat patch: 1.14.4-8` marker. |
 | `common/process/ancestor_darwin.go` | Read verified process identity and walk the Darwin parent chain. |
 | `common/process/ancestor_darwin_test.go` | Test identity, UID, login bridge and ancestry. |
 | `common/process/searcher_darwin_shared.go` | Verify socket owner identity before attributing the path; reject ambiguous UDP owners. |
@@ -93,7 +93,7 @@ When attribution is uncertain, do not invent a parent or show a process prompt. 
 
 ## Route prompts
 
-Prompts require a verified socket owner, a global-unicast, non-private IPv4 destination and a destination port other than 53. Private, localhost, link-local, multicast, invalid and IPv6 destinations use ordinary rules without waiting. A child command needs a verified ancestor matching an enabled app with child prompts enabled. Saved child choices, configured global commands and saved process routes suppress the corresponding child prompt. A child choice is keyed by app ID and executable path and persists in ipFeat settings. The unknown-process prompt is evaluated after child prompts and only for a user process with UID at least 500 and a verified PID and start time.
+Prompts require a verified socket owner, a global-unicast, non-private IPv4 destination and a destination port other than 53. Private, localhost, link-local, multicast, invalid and IPv6 destinations use ordinary rules without waiting. A child command needs a verified ancestor matching an enabled app with child prompts enabled. Saved child choices, configured global commands and saved process routes suppress the corresponding child prompt. A child choice is keyed by app ID and executable path and persists in ipFeat settings. The unknown-process prompt is evaluated after child prompts for every UID, including system daemons with UID 0 or 200, when the socket owner has a verified PID and start time. The sing-box process itself is excluded to prevent recursive prompts.
 
 When the optional unknown-process prompt is enabled, it covers processes absent from known app and command paths. **Save route** creates a permanent executable-path rule in ipFeat; it is included in encrypted backups and later launches do not prompt. **Use once** keeps the selected route only for the current process instance. These are UI choices: the engine receives a route tag or `reject` in both cases, while ipFeat separately writes a saved choice into its configuration and live policy. A transient choice is keyed by UID, PID, process start time and executable path. The parent path is included in the request to help identify helpers such as `git` launched by `brew`; the socket owner remains the actual process named in the prompt. The cache holds at most 1,024 entries; completed unknown entries are evicted oldest-first if it fills. Revision 6 removes cached unknown choices for a path when that path is removed from `known_process_paths`, so deleting a saved route can prompt again on the next eligible connection from the same running process. Ordinary policy updates preserve unrelated unknown choices.
 
@@ -119,4 +119,4 @@ ipFeat maps each entry to the nearest registered program in the verified owner/a
 4. Run the Go tests for process identity, ambiguous UDP ownership, the login bridge, `sudo` boundary, ancestor rule compilation, live policy, public IPv4 prompts, delayed replies, saved route deletion, traffic checkpoints and restart persistence. Run Swift generator, statistics and backup tests; validate both base and policy with the patched `sing-box check`.
 5. On a live TUN, verify that editing and bulk moving app or group rules does not restart the engine or drop unrelated existing flows. Check `curl -4 https://api.ipify.org` from iTerm2, public and local SSH, a saved unlisted process across two launches, **Use once** across two launches, a deleted saved route in an already-running process, a prompt left open beyond 20 seconds, independent resets for a program and a route, statistics after closing ipFeat, statistics after engine restart, and rollback to the official engine.
 
-Prompt interception requires the patched local engine and a running ipFeat. The per-app child prompt is enabled by default for newly added apps; saved settings for existing apps are unchanged. The global unknown-process prompt is off by default.
+Prompt interception requires the patched local engine and a running ipFeat. The per-app child prompt is enabled by default for newly added apps; saved settings for existing apps are unchanged. The global unknown-process prompt is off by default. Revision 8 removes the UID threshold; it does not change the separate PF kill switch, which currently covers only UID 500 and higher while the TUN is unavailable.

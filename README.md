@@ -56,7 +56,7 @@ The **Installation / Check…** view checks a saved VPS and can migrate an earli
 
 The rename from IP Informer to ipFeat changes the app bundle identifier, support directories, Keychain service names, and managed service names. On first launch, ipFeat copies existing user settings and support files without overwriting new data, and reads old Keychain records when needed. Installing the ipFeat network service replaces the old LaunchDaemon and PF anchor after validating the new configuration. The old support directory remains as a rollback copy. If an old login item is still registered, turn it off in the old app and enable **Launch at login** in ipFeat.
 
-The local patched engine is pinned to sing-box `1.14.4-7`. Automatic installation of an unrelated official engine version is disabled while the patch is active. VPS installations use official sing-box releases. For patch behavior and future ports, see [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
+The local patched engine is pinned to sing-box `1.14.4-8`. Automatic installation of an unrelated official engine version is disabled while the patch is active. VPS installations use official sing-box releases. For patch behavior and future ports, see [SING_BOX_PATCH.md](SING_BOX_PATCH.md).
 
 ## Traffic statistics
 

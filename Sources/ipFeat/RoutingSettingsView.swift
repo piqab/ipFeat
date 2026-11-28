@@ -142,7 +142,7 @@ struct RoutingSettingsView: View {
                         }.buttonStyle(.borderless)
                     }
                 }
-                Text("Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-7 to skip process prompts for matching domains. Only IPv4 connections are routed.")
+                Text("Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-8 to skip process prompts for matching domains. Only IPv4 connections are routed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -208,7 +208,7 @@ struct RoutingSettingsView: View {
                 get: { store.configuration.askUnknownProcesses },
                 set: { store.setAskUnknownProcesses($0) }
             ))
-            Text("At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-7. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections.")
+            Text("At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-8. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

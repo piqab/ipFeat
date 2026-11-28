@@ -210,15 +210,15 @@ struct SingBoxSettingsView: View {
                     "Работает: \(engine.activeVersion ?? "системная версия \(engine.installedVersion ?? "не найдена")")")
                 .font(.caption)
             HStack {
-                Text(engine.isPatched && engine.activePatchRevision != 7
-                     ? "Patch 1.14.4-7 adds persistent traffic counters and keeps route prompts open."
+                Text(engine.isPatched && engine.activePatchRevision != 8
+                     ? "Patch 1.14.4-8 adds persistent traffic counters and keeps route prompts open."
                      : engine.isPatched
-                       ? "Patch 1.14.4-7 active · traffic is counted even when this window is closed."
-                       : "Patch 1.14.4-7 adds live rules, route prompts and traffic counters.")
+                       ? "Patch 1.14.4-8 active · traffic is counted even when this window is closed."
+                       : "Patch 1.14.4-8 adds live rules, route prompts and traffic counters.")
                     .font(.caption)
                 Spacer()
                 if engine.isPatched {
-                    if engine.activePatchRevision != 7 {
+                    if engine.activePatchRevision != 8 {
                         Button("Update patch") { Task { await engine.installPatch(); await service.refresh() } }
                             .disabled(engine.isInstalling)
                     }

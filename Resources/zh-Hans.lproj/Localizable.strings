@@ -181,7 +181,7 @@
 "Add several cloud or local models and select the one used by the ? button in a route prompt. AI only explains the process; you choose the route." = "可添加多个云端或本地模型，并选择路由询问窗口中“?”按钮使用的模型。AI 只解释进程用途；路由由您选择。";
 "Ask AI what this process may be" = "询问 AI 此进程的用途";
 "Ask for a route for unlisted processes" = "询问未列出进程的路径";
-"At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-6. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections." = "未列出的应用、命令或后台进程首次连接公网 IPv4 时询问路由。“保存路由”会在“程序 → 从路由询问窗口保存”中添加永久规则；“仅本次使用”只对本次启动有效。需要补丁 1.14.4-6。20 秒内未选择时，首次连接会被阻止，但窗口会保持打开以处理后续连接。";
+"At the first public IPv4 connection of an unlisted app, command or background process. Save route adds a permanent rule in Programs → Saved from route prompts; Use once applies only to this launch. Requires patch 1.14.4-8. After 20 seconds without an answer, the first connection is blocked; the window stays open for later connections." = "未列出的应用、命令或后台进程首次连接公网 IPv4 时询问路由。“保存路由”会在“程序 → 从路由询问窗口保存”中添加永久规则；“仅本次使用”只对本次启动有效。需要补丁 1.14.4-8。20 秒内未选择时，首次连接会被阻止，但窗口会保持打开以处理后续连接。";
 "Block public internet" = "阻止公网访问";
 "Category" = "类别";
 "DNS A-запись домена должна вести на публичный IPv4 VPS. Откройте на VPS порты 80 и 443 для получения сертификата ACME; для Hysteria2 откройте также выбранный UDP-порт." = "域名的 DNS A 记录必须指向 VPS 的公网 IPv4。为获取 ACME 证书，请在 VPS 上开放 80 和 443 端口；使用 Hysteria2 时，还需开放所选 UDP 端口。";
@@ -360,7 +360,7 @@
 "Add domain rule" = "添加域名规则";
 "Search domains" = "搜索域名";
 "For example: *.com → direct, *.blabla.eu → proxy" = "例如：*.com → direct，*.blabla.eu → proxy";
-"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-6 to skip process prompts for matching domains. Only IPv4 connections are routed." = "规则先于应用的常规路由应用于所有程序。已阻止的程序仍被阻止。更具体的域名优先。安装补丁 1.14.4-6 后，匹配域名不会触发进程路由询问。仅路由 IPv4 连接。";
+"Rules apply to every program before its normal route. A blocked program stays blocked. More specific domains win. Install patch 1.14.4-8 to skip process prompts for matching domains. Only IPv4 connections are routed." = "规则先于应用的常规路由应用于所有程序。已阻止的程序仍被阻止。更具体的域名优先。安装补丁 1.14.4-8 后，匹配域名不会触发进程路由询问。仅路由 IPv4 连接。";
 "Domain route" = "域名路由";
 "Use an exact name such as example.com or a subdomain mask such as *.example.com. The mask does not include example.com itself." = "输入精确域名（如 example.com）或子域名掩码（如 *.example.com）。掩码不包含 example.com 本身。";
 "Enabled" = "已启用";

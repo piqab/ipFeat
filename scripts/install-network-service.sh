@@ -52,7 +52,7 @@ if [[ -L "$MANAGED_BINARY" ]]; then
 fi
 if [[ -f "$LEGACY_PLIST" ]] && [[ -x "$MANAGED_BINARY" ]] && \
    "$MANAGED_BINARY" version | /usr/bin/grep -Fq 'IPInformer patch: 1.14.4-'; then
-    BUNDLED_PATCH="$SCRIPT_DIR/../../Resources/engines/sing-box-1.14.4-ipfeat-7"
+    BUNDLED_PATCH="$SCRIPT_DIR/../../Resources/engines/sing-box-1.14.4-ipfeat-8"
     BUNDLED_HASH="$BUNDLED_PATCH.sha256"
     if [[ ! -x "$BUNDLED_PATCH" || ! -f "$BUNDLED_HASH" ]]; then
         echo "The ipFeat patched engine is missing from the app bundle."
@@ -61,7 +61,7 @@ if [[ -f "$LEGACY_PLIST" ]] && [[ -x "$MANAGED_BINARY" ]] && \
     EXPECTED_HASH=$(/usr/bin/tr -d '[:space:]' < "$BUNDLED_HASH")
     ACTUAL_HASH=$(/usr/bin/shasum -a 256 "$BUNDLED_PATCH" | /usr/bin/awk '{print $1}')
     [[ "$ACTUAL_HASH" == "$EXPECTED_HASH" ]] || { echo "Bundled patched engine checksum mismatch"; exit 1; }
-    PATCH_DIR="$INSTALL_DIR/engines/1.14.4-ipfeat-7"
+    PATCH_DIR="$INSTALL_DIR/engines/1.14.4-ipfeat-8"
     /bin/mkdir -p "$PATCH_DIR"
     /usr/bin/install -o root -g wheel -m 755 "$BUNDLED_PATCH" "$PATCH_DIR/sing-box"
     /bin/ln -sfn "$PATCH_DIR/sing-box" "$MANAGED_BINARY"
