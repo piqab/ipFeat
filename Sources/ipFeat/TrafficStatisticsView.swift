@@ -5,9 +5,44 @@ private enum TrafficResetTarget {
     case application(RoutedApplication)
 }
 
+private enum TrafficSortOption: String, CaseIterable, Identifiable {
+    case nameAscending, nameDescending
+    case currentTotal, currentDownload, currentUpload
+    case periodTotal, periodDownload, periodUpload
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .nameAscending: return "Name A–Z"
+        case .nameDescending: return "Name Z–A"
+        case .currentTotal: return "Current traffic ↓+↑"
+        case .currentDownload: return "Current download ↓"
+        case .currentUpload: return "Current upload ↑"
+        case .periodTotal: return "Period traffic ↓+↑"
+        case .periodDownload: return "Period download ↓"
+        case .periodUpload: return "Period upload ↑"
+        }
+    }
+
+    func value(total: TrafficBytes, rate: TrafficBytes) -> Int64 {
+        let bytes = rawValue.hasPrefix("current") ? rate : total
+        switch self {
+        case .currentTotal, .periodTotal:
+            let (sum, overflow) = bytes.download.addingReportingOverflow(bytes.upload)
+            return overflow ? Int64.max : sum
+        case .currentDownload, .periodDownload: return bytes.download
+        case .currentUpload, .periodUpload: return bytes.upload
+        case .nameAscending, .nameDescending: return 0
+        }
+    }
+}
+
 struct TrafficStatisticsView: View {
     @ObservedObject var store: RoutingStore
     @ObservedObject private var statistics = TrafficStatistics.shared
+    @AppStorage("traffic.routesSort") private var routeSortRaw = TrafficSortOption.nameAscending.rawValue
+    @AppStorage("traffic.programsSort") private var programSortRaw = TrafficSortOption.nameAscending.rawValue
     @State private var period: TrafficPeriod = .today
     @State private var resetTarget: TrafficResetTarget?
     @State private var actionError: String?
@@ -34,13 +69,17 @@ struct TrafficStatisticsView: View {
                 if let message = actionError ?? statistics.error {
                     Text(message).foregroundStyle(.red).font(.caption)
                 }
-                Text("Routes").font(.headline)
-                let routeTags = Set(store.outboundTags).union(totals.routes.keys).sorted { lhs, rhs in
-                    let leftName = store.configuration.outboundDisplayName(for: lhs)
-                    let rightName = store.configuration.outboundDisplayName(for: rhs)
-                    let comparison = leftName.localizedStandardCompare(rightName)
-                    return comparison == .orderedSame ? lhs < rhs : comparison == .orderedAscending
+                HStack {
+                    Text("Routes").font(.headline)
+                    Spacer()
+                    sortPicker("Sort routes", selection: $routeSortRaw)
                 }
+                let routeTags = sorted(Array(Set(store.outboundTags).union(totals.routes.keys)),
+                                       by: TrafficSortOption(rawValue: routeSortRaw) ?? .nameAscending,
+                                       name: { store.configuration.outboundDisplayName(for: $0) },
+                                       tieBreaker: { $0 },
+                                       total: { totals.routes[$0] ?? TrafficBytes() },
+                                       rate: { statistics.routeRates[$0] ?? TrafficBytes() })
                 ForEach(routeTags, id: \.self) { tag in
                     trafficRow(title: store.configuration.outboundDisplayName(for: tag), subtitle: tag,
                                bytes: totals.routes[tag] ?? TrafficBytes(),
@@ -48,8 +87,17 @@ struct TrafficStatisticsView: View {
                         resetTarget = .route(tag)
                     }
                 }
-                Text("Programs").font(.headline)
-                ForEach(apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) { app in
+                HStack {
+                    Text("Programs").font(.headline)
+                    Spacer()
+                    sortPicker("Sort programs", selection: $programSortRaw)
+                }
+                let sortedApps = sorted(apps,
+                                        by: TrafficSortOption(rawValue: programSortRaw) ?? .nameAscending,
+                                        name: { $0.name }, tieBreaker: { $0.executablePath },
+                                        total: { totals.applications[$0.id] ?? TrafficBytes() },
+                                        rate: { statistics.applicationRates[$0.id] ?? TrafficBytes() })
+                ForEach(sortedApps) { app in
                     trafficRow(title: app.name, subtitle: app.executablePath,
                                bytes: totals.applications[app.id] ?? TrafficBytes(),
                                rate: statistics.applicationRates[app.id] ?? TrafficBytes(), application: app) {
@@ -80,6 +128,33 @@ struct TrafficStatisticsView: View {
                 } catch { actionError = error.localizedDescription }
                 resetTarget = nil
             }
+        }
+    }
+
+    private func sortPicker(_ title: String, selection: Binding<String>) -> some View {
+        Picker(LocalizedStringKey(title), selection: selection) {
+            ForEach(TrafficSortOption.allCases) { option in
+                Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+            }
+        }
+        .pickerStyle(.menu)
+        .frame(maxWidth: 245)
+    }
+
+    private func sorted<Item>(_ items: [Item], by option: TrafficSortOption,
+                              name: (Item) -> String, tieBreaker: (Item) -> String,
+                              total: (Item) -> TrafficBytes, rate: (Item) -> TrafficBytes) -> [Item] {
+        items.sorted { left, right in
+            if option != .nameAscending && option != .nameDescending {
+                let leftValue = option.value(total: total(left), rate: rate(left))
+                let rightValue = option.value(total: total(right), rate: rate(right))
+                if leftValue != rightValue { return leftValue > rightValue }
+            }
+            let comparison = name(left).localizedStandardCompare(name(right))
+            if comparison != .orderedSame {
+                return option == .nameDescending ? comparison == .orderedDescending : comparison == .orderedAscending
+            }
+            return tieBreaker(left) < tieBreaker(right)
         }
     }
 

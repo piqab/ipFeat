@@ -209,3 +209,13 @@
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "Зашифрованный архив содержит маршруты, ожидающие установки VPS, клиентские и серверные JSON, настройки ИИ и доступные ключи API, а также историю трафика и точки сброса счётчиков. Если серверный конфиг недоступен, экспорт остановится. Программы, файлы sing-box и системная служба в архив не входят.";
 "Choose a personal route for this program." = "Выберите личный маршрут для этой программы.";
 "Choosing a personal route moves this program out of its group." = "Выбор личного маршрута перенесёт программу из группы.";
+"Sort routes" = "Сортировка маршрутов";
+"Sort programs" = "Сортировка программ";
+"Name A–Z" = "Название А–Я";
+"Name Z–A" = "Название Я–А";
+"Current traffic ↓+↑" = "Текущая скорость ↓+↑";
+"Current download ↓" = "Сейчас получено ↓";
+"Current upload ↑" = "Сейчас отправлено ↑";
+"Period traffic ↓+↑" = "За период ↓+↑";
+"Period download ↓" = "Получено за период ↓";
+"Period upload ↑" = "Отправлено за период ↑";

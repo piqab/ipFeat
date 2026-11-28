@@ -447,3 +447,13 @@
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "加密归档包含路由、待完成的 VPS 安装、客户端和服务器 JSON、AI 设置及可读取的 API 密钥，以及流量历史和重置基线。缺少服务器配置时导出会停止。应用程序、sing-box 可执行文件和系统服务不包含在内。";
 "Choose a personal route for this program." = "为此程序选择专属路由。";
 "Choosing a personal route moves this program out of its group." = "选择专属路由会将此程序移出群组。";
+"Sort routes" = "路由排序";
+"Sort programs" = "程序排序";
+"Name A–Z" = "名称 A–Z";
+"Name Z–A" = "名称 Z–A";
+"Current traffic ↓+↑" = "当前速率 ↓+↑";
+"Current download ↓" = "当前下载 ↓";
+"Current upload ↑" = "当前上传 ↑";
+"Period traffic ↓+↑" = "本期流量 ↓+↑";
+"Period download ↓" = "本期下载 ↓";
+"Period upload ↑" = "本期上传 ↑";

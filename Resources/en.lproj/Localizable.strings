@@ -379,3 +379,13 @@
 "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included." = "The encrypted archive includes routing, pending VPS installations, client and server JSON, AI settings and readable API keys, and traffic history with reset counters. Missing server secrets stop export. App bundles, sing-box binaries and the system service are not included.";
 "Choose a personal route for this program." = "Choose a personal route for this program.";
 "Choosing a personal route moves this program out of its group." = "Choosing a personal route moves this program out of its group.";
+"Sort routes" = "Sort routes";
+"Sort programs" = "Sort programs";
+"Name A–Z" = "Name A–Z";
+"Name Z–A" = "Name Z–A";
+"Current traffic ↓+↑" = "Current traffic ↓+↑";
+"Current download ↓" = "Current download ↓";
+"Current upload ↑" = "Current upload ↑";
+"Period traffic ↓+↑" = "Period traffic ↓+↑";
+"Period download ↓" = "Period download ↓";
+"Period upload ↑" = "Period upload ↑";

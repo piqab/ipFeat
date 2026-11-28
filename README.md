@@ -32,7 +32,7 @@ sudo ipfeat-recover
 
 - **Profiles** contain saved server outbounds plus **Local network**, **This Mac only**, and **No network**. A group route applies to all its programs. An ungrouped program can use its personal profile. The default route covers everything else.
 - **Programs** lists groups, ungrouped apps, and routes saved from prompts. Its shared search field sits directly above the program list and searches names and executable paths. Domain rules have their own search field.
-- **Traffic** lists routes and programs alphabetically. A program's route can be changed there; assigning a personal route to a grouped program moves it out of its group so the other members keep their group route.
+- **Traffic** has independent sort menus for routes and programs: name in either direction, current combined/download/upload speed, or combined/download/upload bytes in the selected period. A program's route can be changed there; assigning a personal route to a grouped program moves it out of its group so the other members keep their group route.
 - **Domain routes** apply across programs, with exact patterns such as `example.com` and suffix patterns such as `*.example.com`. More specific rules win. Matching requires a known hostname; connections made directly to an IP address cannot match a domain rule.
 - Programs can allow direct access to local IPv4 networks while public traffic follows a proxy or another selected route. Generated DNS and routing use IPv4; IPv6 connections are rejected.
 - The shared WebKit networking process can use a selected profile. This can affect embedded pages in several programs.
